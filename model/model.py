@@ -1,12 +1,76 @@
+# import pytorch
 import torch
-import torch.nn as nn
+from torch import nn
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
+
 import pytorch_lightning as pl
+from pytorch_lightning.utilities.model_summary import ModelSummary
+
+import pandas as pd
 
 from sklearn import metrics
+from sklearn.model_selection import train_test_split
 
+import os
 
+class ECG_DataSet(Dataset):
+    def __init__(self, data: pd.DataFrame)
+        self.data = data
 
+    def __len__(self):
+        return len(self.data)
 
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+class ECG_DataModule(pl.LightningDataModule):
+    def __init__(self):
+        super().__init__()
+        self.data_dir = "data_dir"
+        self.batch_size = 32
+
+    def setup(self, stage=None):
+
+        train_df, test_df = train_test_split(self.data, test_size=0.3)
+        self.val_df, self.test_df = train_test_split(test_df, test_size=0.5)
+
+        # Assign train/val datasets for use in dataloaders
+        if stage == "fit" or stage is None:
+            # self.train_dataset = ...
+            # self.val_dataset = ...
+            pass
+
+        # Assign test dataset for use in dataloader(s)
+        if stage == "test" or stage is None:
+            # self.test_dataset = ...
+            pass
+
+    def train_dataloader(self):
+        return DataLoader(
+            dataset=ECG_DataModule(self.train_df),
+            batch_size=self.batch_size,
+            num_workers=os.cpu_count(),
+            shuffle=True,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            dataset=ECG_DataModule(self.val_df),
+            batch_size=self.batch_size,
+            num_workers=os.cpu_count(),
+            shuffle=False,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            dataset=ECG_DataModule(self.test_df),
+            batch_size=self.batch_size,
+            num_workers=os.cpu_count(),
+            shuffle=False,
+        )
+
+####################################################################################################
 
 class ECG_Dilineation_EncDec(pl.LightningModule):
 
@@ -115,7 +179,20 @@ class Decoder(nn.Module):
         x = self.net(x)
         return x
         
+
+
+# used source:
+# https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/08-deep-autoencoders.html#Building-the-autoencoder
+# https://pytorch-lightning.readthedocs.io/en/1.1.8/introduction_guide.html
+# https://pytorch-lightning.readthedocs.io/en/0.10.0/introduction_guide.html#the-model
+
+# Generate Dummy Training Data
+torch.rand(5, 500)
+
+
+
+
 model = ECG_Dilineation_EncDec(in_channels=1, base_channel_size=8, kernel_size=3, stride=2, padding=1, feature_channel_size=5)
 
-from pytorch_lightning.utilities.model_summary import ModelSummary
-print(ModelSummary(model, max_depth=-1))
+
+print(ModelSummary(model, max_depth=-1
