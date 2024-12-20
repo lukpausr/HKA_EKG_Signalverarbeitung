@@ -1,24 +1,24 @@
-# import pytorch
+import os
+import pandas as pd
+
+import wandb
+
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
-
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.model_summary import ModelSummary
-
 from pytorch_lightning import Trainer
 
 
-# from pytorch_forecasting import TimeSeriesDataSet
-
-
-import pandas as pd
+from pytorch_lightning.loggers import WandbLogger
 
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
-import os
+
+
 
 # TODO: Tensoren in liste speichern und dann auf Liste zugreifen
 class ECG_DataSet(torch.utils.data.Dataset):
@@ -496,7 +496,7 @@ if __name__ == '__main__':
     data_directory = r"D:\SynologyDrive\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\data"
     enable_print = False
     batch_size = 32
-    max_epochs = 5
+    max_epochs = 50
 
     if enable_print:
         test_dataset = ECG_DataSet(data_dir=data_directory+'\\pd_dataset_train\\')
@@ -515,8 +515,19 @@ if __name__ == '__main__':
     model = UNET_1D(in_channels=1, layer_n=512, out_channels=1, kernel_size=7, depth=2)
     print(ModelSummary(model, max_depth=-1))
 
-    trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory)
+    # Initialize logger on wandb
+    # Source on how to setup wandb logger: https://wandb.ai/HKA-EKG-Signalverarbeitung
+    wandb_logger = WandbLogger(project='HKA-EKG-Signalverarbeitung')
+
+    # Add batch size to wandb config
+    wandb_logger.experiment.config["batch_size"] = batch_size
+
+    # Initialize Trainer with wandb logger
+    trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, logger=wandb_logger)
     trainer.fit(model=model, datamodule=dm)
+
+    # Finish wandb
+    wandb.finish()
 
 
 # used source:
