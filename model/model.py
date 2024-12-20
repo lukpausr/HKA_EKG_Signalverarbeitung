@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split
 
 import os
 
+# TODO: Tensoren in liste speichern und dann auf Liste zugreifen
 class ECG_DataSet(torch.utils.data.Dataset):
     def __init__(self, data_dir: str, label_cols: str = ['feature_rpeak'], data_cols: str = ['raw_data']):
         self.data_dir = data_dir
@@ -112,7 +113,7 @@ class ECG_Dilineation_EncDec(pl.LightningModule):
         self.in_channels = 1
         self.feature_channel_size = 1
 
-        # self.save_hyperparameters()
+        self.save_hyperparameters()
     
         self.encoder = Encoder(in_channels, base_channel_size, kernel_size, stride, padding)
         self.decoder = Decoder(in_channels, base_channel_size, feature_channel_size, kernel_size, stride, padding)
@@ -164,6 +165,8 @@ class ECG_Dilineation_EncDec(pl.LightningModule):
         loss = nn.BCEWithLogitsLoss()(x_hat, y)
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
+
+####################################################################################################
 
 # https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/08-deep-autoencoders.html
 class Encoder(nn.Module):
@@ -243,10 +246,14 @@ class Decoder(nn.Module):
         x = self.net(x)
         return x
 
+####################################################################################################
 # From Source https://www.kaggle.com/code/super13579/u-net-1d-cnn-with-pytorch we build a U-Net Implementation using
 # pytorch lightning
+
+# Convolution + BatchNorm + ReLU Block
+# QUESTION: Why is the padding set to 3? Can it be adapted to the kernel size automatically?
 class conbr_block(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride, dilation):
+    def __init__(self, in_channels, out_channels, kernel_size, stride):
         super(conbr_block, self).__init__()
 
         self.net = nn.Sequential(
@@ -257,44 +264,12 @@ class conbr_block(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-
-class se_block(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(se_block, self).__init__()
-
-        self.net = nn.Sequential(
-            nn.Conv1d(in_channels, out_channels//8, kernel_size=1, padding=0),
-            nn.ReLU(),
-            nn.Conv1d(out_channels//8, in_channels, kernel_size=1, padding=0),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        y = nn.functional.adaptive_avg_pool1d(x, 1)
-        z = self.net(y)
-        x_hat = torch.add(x, z)
-
-        return x_hat
     
-class re_block(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, dilation):
-        super(re_block, self).__init__()
-
-        self.net = nn.Sequential(
-            conbr_block(in_channels, out_channels, kernel_size, 1, dilation),
-            conbr_block(out_channels, out_channels, kernel_size, 1, dilation),
-            se_block(out_channels, out_channels),
-        )
-
-    def forward(self, x):
-        y = self.net(x)
-        x_hat = torch.add(x, y)
-
-        return x_hat
-
 class UNET_1D(pl.LightningModule):
     def __init__(self, in_channels, layer_n, out_channels=1, kernel_size=7, depth=3):
         super(UNET_1D, self).__init__()
+
+        self.save_hyperparameters()
 
         self.example_input_array = torch.rand(1, in_channels, layer_n)
 
@@ -304,148 +279,163 @@ class UNET_1D(pl.LightningModule):
         self.depth = depth
         self.out_channels = out_channels
 
-        self.AvgPool1D1 = nn.AvgPool1d(in_channels, stride=4)
-        self.AvgPool1D2 = nn.AvgPool1d(in_channels, stride=16)
-        self.AvgPool1D3 = nn.AvgPool1d(in_channels, stride=16*16)
+        # Define pooling operations on encoder side
+        self.AvgPool1D1 = nn.AvgPool1d(in_channels, stride=2)
+        self.AvgPool1D2 = nn.AvgPool1d(in_channels, stride=2)
+        self.AvgPool1D3 = nn.AvgPool1d(in_channels, stride=2)
+        self.AvgPool1D4 = nn.AvgPool1d(in_channels, stride=2)
+
+        # Apply 2 1d-convolutional layers
+        # Input data size: 1 x 512
+        # Output data size: 64 x 512
+        self.layer1 = nn.Sequential(
+            conbr_block(self.in_channels, self.in_channels * 64, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 64, self.in_channels * 64, self.kernel_size, stride=1),
+        )
+
+        # Apply 2 1d-convolutional layers
+        # Input data size: 64 x 256
+        # Output data size: 128 x 256
+        self.layer2 = nn.Sequential(
+            conbr_block(self.in_channels * 64, self.in_channels * 128, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 128, self.in_channels * 128, self.kernel_size, stride=1),
+        )
+
+        # Apply 2 1d-convolutional layers
+        # Input data size: 128 x 128
+        # Output data size: 256 x 128
+        self.layer3 = nn.Sequential(
+            conbr_block(self.in_channels * 128, self.in_channels * 256, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 256, self.in_channels * 256, self.kernel_size, stride=1),
+        )
         
-        self.layer1 = self.down_layer(self.in_channels, self.layer_n, self.kernel_size, 1, 2)
-        self.layer2 = self.down_layer(self.layer_n, int(self.layer_n*2), self.kernel_size, 4, 2)
-        self.layer3 = self.down_layer(int(self.layer_n*2)+int(self.in_channels), int(self.layer_n*3), self.kernel_size, 4, 2)
-        self.layer4 = self.down_layer(int(self.layer_n*3)+int(self.in_channels), int(self.layer_n*4), self.kernel_size, 4, 2)
-        self.layer5 = self.down_layer(int(self.layer_n*4)+int(self.in_channels), int(self.layer_n*5), self.kernel_size, 4, 2)
+        # Apply 2 1d-convolutional layers
+        # Input data size: 256 x 64
+        # Output data size: 512 x 64
+        self.layer4 = nn.Sequential(
+            conbr_block(self.in_channels * 256, self.in_channels * 512, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 512, self.in_channels * 512, self.kernel_size, stride=1),
+        )
 
-        self.cbr_up1 = conbr_block(int(self.layer_n*7), int(self.layer_n*3), self.kernel_size, 1, 1)
-        self.cbr_up2 = conbr_block(int(self.layer_n*5), int(self.layer_n*2), self.kernel_size, 1, 1)
-        self.cbr_up3 = conbr_block(int(self.layer_n*3), self.layer_n, self.kernel_size, 1, 1)
+        # Apply 2 1d-convolutional layers
+        # Input data size: 512 x 32
+        # Output data size: 1024 x 32
+        self.layer5 = nn.Sequential(
+            conbr_block(self.in_channels * 512, self.in_channels * 1024, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 1024, self.in_channels * 1024, self.kernel_size, stride=1),
+        )
 
-        self.upsample = nn.Upsample(scale_factor=4, mode='nearest')
-        self.upsample1 = nn.Upsample(scale_factor=4, mode='nearest')
-        
-        self.outcov = nn.Conv1d(self.layer_n, self.out_channels, kernel_size=self.kernel_size, stride=1,padding = 3)
+        # Transposed convolutional layers
+        # Input data size: 1024 x 32
+        # Output data size: 512 x 64
+        self.layer5T = nn.Sequential(
+            nn.ConvTranspose1d(self.in_channels * 1024, self.in_channels * 512, self.kernel_size, stride=2, padding=3, output_padding=1),
+        )
 
-    def down_layer(self, input_layer, out_layer, kernel, stride, depth):
-        block = []
-        block.append(conbr_block(input_layer, out_layer, kernel, stride, 1))
-        for i in range(depth):
-            block.append(re_block(out_layer,out_layer,kernel,1))
+        # Double Convolutional layer and transposed convolutional layer
+        # Input data size: 1024 x 64
+        # Output data size: 256 x 128
+        self.layer4T = nn.Sequential(
+            conbr_block(self.in_channels * 1024, self.in_channels * 512, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 512, self.in_channels * 256, self.kernel_size, stride=1),
+            nn.ConvTranspose1d(self.in_channels * 256, self.in_channels * 256, self.kernel_size, stride=2, padding=3, output_padding=1),
+        )
 
-        return nn.Sequential(*block)
-            
+        # Double Convolutional layer and transposed convolutional layer
+        # Input data size: 512 x 128
+        # Output data size: 128 x 256
+        self.layer3T = nn.Sequential(
+            conbr_block(self.in_channels * 512, self.in_channels * 256, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 256, self.in_channels * 128, self.kernel_size, stride=1),
+            nn.ConvTranspose1d(self.in_channels * 128, self.in_channels * 128, self.kernel_size, stride=2, padding=3, output_padding=1),
+        )
+
+        # Double Convolutional layer and transposed convolutional layer
+        # Input data size: 256 x 256
+        # Output data size: 64 x 512
+        self.layer2T = nn.Sequential(
+            conbr_block(self.in_channels * 256, self.in_channels * 128, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 128, self.in_channels * 64, self.kernel_size, stride=1),
+            nn.ConvTranspose1d(self.in_channels * 64, self.in_channels * 64, self.kernel_size, stride=2, padding=3, output_padding=1),
+        )
+
+        # Double Convolutional layer to output dimension
+        # Input data size: 128 x 512
+        # Output data size: out_channels x 512
+        self.layer1Out = nn.Sequential(
+            conbr_block(self.in_channels * 128, self.in_channels * 64, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 64, self.in_channels, self.kernel_size, stride=1),
+            nn.Conv1d(self.in_channels, self.out_channels, kernel_size=self.kernel_size, stride=1, padding=3),
+        )
+    
     def forward(self, x):
 
         enablePrint = False
+        if enablePrint: print(x.size())
 
-        if enablePrint:
-            print("Input value size")
-            print(x.size())
-        
-        pool_x1 = self.AvgPool1D1(x)
-        pool_x2 = self.AvgPool1D2(x)
-        pool_x3 = self.AvgPool1D3(x)
-
-        if enablePrint:
-            print("Pool Sizes")
-            print(pool_x1.size())
-            print(pool_x2.size())
-            print(pool_x3.size())
-        
         #############Encoder#####################
 
-        if enablePrint:
-            print("Encoder Sizes")
+        if enablePrint: print("Encoder Sizes")
         
         out_0 = self.layer1(x)
+        if enablePrint: print(out_0.size())
 
-        if enablePrint:
-            print("\t Out 0 / Layer 1")
-            print(out_0.size())
+        pool_out_0 = self.AvgPool1D1(out_0)
+        if enablePrint: print(pool_out_0.size())
 
-        out_1 = self.layer2(out_0)
+        out_1 = self.layer2(pool_out_0)
+        if enablePrint: print(out_1.size())
 
-        if enablePrint:
-            print("\t Out 1 / Layer 2")
-            print(out_1.size())
-        
-        x = torch.cat([out_1, pool_x1], 1)
-        out_2 = self.layer3(x)
+        pool_out_1 = self.AvgPool1D2(out_1)
+        if enablePrint: print(pool_out_1.size())
 
-        if enablePrint:
-            print("\t Out 2 / Layer 3")
-            print(out_2.size())
-        
-        x = torch.cat([out_2, pool_x2], 1)
-        x = self.layer4(x)
+        out_2 = self.layer3(pool_out_1)
+        if enablePrint: print(out_2.size())
 
-        if enablePrint:
-            print("\t Out 3 / Layer 4")
-            print(x.size())
-        
+        pool_out_2 = self.AvgPool1D3(out_2)
+        if enablePrint: print(pool_out_2.size())
+
+        out_3 = self.layer4(pool_out_2)
+        if enablePrint: print(out_3.size())
+
+        pool_out_3 = self.AvgPool1D4(out_3)
+        if enablePrint: print(pool_out_3.size())
+
+        out_4 = self.layer5(pool_out_3)
+        if enablePrint: print(out_4.size())
+
         #############Decoder####################
 
-        if enablePrint:
-            print("Decoder Sizes")
-        
-        up = self.upsample1(x)
+        in_4_a = self.layer5T(out_4)
+        if enablePrint: print(in_4_a.size())
 
-        if enablePrint:
-            print("\t Upsample 1")
-            print(up.size())
+        in_4 = torch.cat([in_4_a, out_3], 1)
+        if enablePrint: print(in_4.size())
 
-        up = torch.cat([up, out_2], 1)
+        in_3_a = self.layer4T(in_4)
+        if enablePrint: print(in_3_a.size())
 
-        if enablePrint:
-            print("\t Concat 1")
-            print(up.size())
+        in_3 = torch.cat([in_3_a, out_2], 1)
+        if enablePrint: print(in_3.size())
 
-        up = self.cbr_up1(up)
+        in_2_a = self.layer3T(in_3)
+        if enablePrint: print(in_2_a.size())
 
-        if enablePrint:
-            print("\t CBR 1")
-            print(up.size())
-        
-        up = self.upsample(up)
+        in_2 = torch.cat([in_2_a, out_1], 1)
+        if enablePrint: print(in_2.size())
 
-        if enablePrint:
-            print("\t Upsample 2")
-            print(up.size())
+        in_1_a = self.layer2T(in_2)
+        if enablePrint: print(in_1_a.size())
 
-        up = torch.cat([up, out_1], 1)
+        in_1 = torch.cat([in_1_a, out_0], 1)
+        if enablePrint: print(in_1.size())
 
-        if enablePrint:
-            print("\t Concat 2")
-            print(up.size())
+        in_0 = self.layer1Out(in_1)
+        if enablePrint: print(in_0.size())
 
-        up = self.cbr_up2(up)
+        #out = self.outcov(up)
 
-        if enablePrint:
-            print("\t CBR 2")
-            print(up.size())
-        
-        up = self.upsample(up)
-
-        if enablePrint:
-            print("\t Upsample 3")
-            print(up.size())
-
-        up = torch.cat([up, out_0], 1)
-
-        if enablePrint:
-            print("\t Concat 3")
-            print(up.size())
-
-        up = self.cbr_up3(up)
-
-        if enablePrint:
-            print("\t CBR 3")
-            print(up.size())
-        
-        out = self.outcov(up)
-
-        if enablePrint:
-            print("\t Out")
-            print(out.size())
-
-        x_hat = nn.functional.sigmoid(out)
+        x_hat = nn.functional.sigmoid(in_0)
 
         return x_hat
 
@@ -486,7 +476,14 @@ class UNET_1D(pl.LightningModule):
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
+    def on_test_epoch_end(self):
+        print('Test Epoch End')
+        print('-----------------------------------')
+
 ####################################################################################################
+####################################################################################################
+####################################################################################################
+
 # Main
 
 if __name__ == '__main__':
@@ -495,83 +492,34 @@ if __name__ == '__main__':
     os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
     pl.seed_everything(42)
+
     data_directory = r"D:\SynologyDrive\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\data"
+    enable_print = False
+    batch_size = 32
+    max_epochs = 5
 
+    if enable_print:
+        test_dataset = ECG_DataSet(data_dir=data_directory+'\\pd_dataset_train\\')
+        x, y = test_dataset.__getitem__(0)
+        print(x)
+        print(y)
+        print(x.shape)
+        print(y.shape)
 
-    test_dataset = ECG_DataSet(data_dir=data_directory+'\\pd_dataset_train\\')
-    x, y = test_dataset.__getitem__(0)
-
-    print(x)
-    print(y)
-    print(x.shape)
-    print(y.shape)
-
-    dm = ECG_DataModule(data_dir=data_directory, batch_size=8)
-    
-    #dm.setup()
-    #dl = dm.train_dataloader()
-
-    #dl = dm.train_dataloader()
-
-
-    #print(dl)
-
-
+    # Define Data Module containing train, test and validation datasets
+    dm = ECG_DataModule(data_dir=data_directory, batch_size=batch_size)
 
     #model = ECG_Dilineation_EncDec(in_channels=1, base_channel_size=8, kernel_size=3, stride=2, padding=1, feature_channel_size=1)
     #print(ModelSummary(model, max_depth=-1))
 
-    model2 = UNET_1D(in_channels=1, layer_n=512, out_channels=1, kernel_size=7, depth=2)
-    print(ModelSummary(model2, max_depth=-1))
+    model = UNET_1D(in_channels=1, layer_n=512, out_channels=1, kernel_size=7, depth=2)
+    print(ModelSummary(model, max_depth=-1))
 
-    trainer = Trainer(max_epochs=10)
-
-    
-    #trainer.fit(model=model2, datamodule=dm)
-
-    #trainer.test(model = model, datamodule = dm)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory)
+    trainer.fit(model=model, datamodule=dm)
 
 
 # used source:
 # https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/08-deep-autoencoders.html#Building-the-autoencoder
 # https://pytorch-lightning.readthedocs.io/en/1.1.8/introduction_guide.html
 # https://pytorch-lightning.readthedocs.io/en/0.10.0/introduction_guide.html#the-model
-
-
-
-# from pytorch_forecasting.data import GroupNormalizer, NaNLabelEncoder
-
-# data_dir = r"D:\SynologyDrive\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\data"
-# train_df = pd.read_csv(data_dir + "/pd_dataset_train.csv")
-
-# context_length = 512
-# prediction_length = 512
-# training_cutoff = 512
-
-# x = TimeSeriesDataSet(
-#     data = train_df[lambda x: x.time_idx < training_cutoff], 
-#     time_idx = "time_idx", 
-#     target = "feature_rpeak", 
-#     target_normalizer = GroupNormalizer(groups = ["group_ids"]),
-#     categorical_encoders = {"group_ids": NaNLabelEncoder().fit(train_df.group_ids)},
-#     group_ids = ["group_ids"],
-#     min_encoder_length = context_length,
-#     max_encoder_length = context_length,
-#     min_prediction_length = prediction_length,
-#     max_prediction_length = prediction_length,
