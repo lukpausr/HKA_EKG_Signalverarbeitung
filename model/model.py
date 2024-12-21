@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
+import torch.optim as optim
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.model_summary import ModelSummary
 from pytorch_lightning import Trainer
@@ -271,6 +272,9 @@ class UNET_1D(pl.LightningModule):
 
         self.save_hyperparameters()
 
+        self.loss = nn.BCEWithLogitsLoss()
+        # self.loss = nn.CrossEntropyLoss()
+
         self.example_input_array = torch.rand(1, in_channels, layer_n)
 
         self.in_channels = in_channels
@@ -441,7 +445,8 @@ class UNET_1D(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-        return optimizer
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.2, patience=20, min_lr=5e-5)
+        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
     
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -450,7 +455,7 @@ class UNET_1D(pl.LightningModule):
 
         x_hat = self.forward(x)
 
-        loss = nn.BCEWithLogitsLoss()(x_hat, y)
+        loss = self.loss(x_hat, y)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
     
@@ -461,7 +466,7 @@ class UNET_1D(pl.LightningModule):
 
         x_hat = self.forward(x)
 
-        loss = nn.BCEWithLogitsLoss()(x_hat, y)
+        loss = self.loss(x_hat, y)
         self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
     
@@ -472,7 +477,7 @@ class UNET_1D(pl.LightningModule):
 
         x_hat = self.forward(x)
 
-        loss = nn.BCEWithLogitsLoss()(x_hat, y)
+        loss = self.loss(x_hat, y)
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
@@ -494,10 +499,15 @@ if __name__ == '__main__':
     pl.seed_everything(42)
 
     data_directory = r"D:\SynologyDrive\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\data"
+    # data_directory = r"\\NAS-K2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV"
     enable_print = False
     batch_size = 32
-    max_epochs = 50
+    max_epochs = 20
+    
+    conduct_training = True
 
+    #print(torch.cuda_is_available())
+    
     if enable_print:
         test_dataset = ECG_DataSet(data_dir=data_directory+'\\pd_dataset_train\\')
         x, y = test_dataset.__getitem__(0)
@@ -509,25 +519,29 @@ if __name__ == '__main__':
     # Define Data Module containing train, test and validation datasets
     dm = ECG_DataModule(data_dir=data_directory, batch_size=batch_size)
 
+    # trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, accelerator="auto", devices="auto", strategy="auto")
+
     #model = ECG_Dilineation_EncDec(in_channels=1, base_channel_size=8, kernel_size=3, stride=2, padding=1, feature_channel_size=1)
     #print(ModelSummary(model, max_depth=-1))
 
-    model = UNET_1D(in_channels=1, layer_n=512, out_channels=1, kernel_size=7, depth=2)
-    print(ModelSummary(model, max_depth=-1))
+    if(conduct_training):
 
-    # Initialize logger on wandb
-    # Source on how to setup wandb logger: https://wandb.ai/HKA-EKG-Signalverarbeitung
-    wandb_logger = WandbLogger(project='HKA-EKG-Signalverarbeitung')
+        model = UNET_1D(in_channels=1, layer_n=512, out_channels=1, kernel_size=7, depth=2)
+        print(ModelSummary(model, max_depth=-1))
 
-    # Add batch size to wandb config
-    wandb_logger.experiment.config["batch_size"] = batch_size
+        # Initialize logger on wandb
+        # Source on how to setup wandb logger: https://wandb.ai/HKA-EKG-Signalverarbeitung
+        wandb_logger = WandbLogger(project='HKA-EKG-Signalverarbeitung')
 
-    # Initialize Trainer with wandb logger
-    trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, logger=wandb_logger)
-    trainer.fit(model=model, datamodule=dm)
+        # Add batch size to wandb config
+        wandb_logger.experiment.config["batch_size"] = batch_size
 
-    # Finish wandb
-    wandb.finish()
+        # Initialize Trainer with wandb logger
+        trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, logger=wandb_logger)
+        trainer.fit(model=model, datamodule=dm)
+
+        # Finish wandb
+        wandb.finish()
 
 
 # used source:
