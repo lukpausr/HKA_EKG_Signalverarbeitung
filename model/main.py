@@ -31,7 +31,7 @@ def generatePlot(x, y, x_hat, y_hat):
     axs[0].set_title('ECG Data')
     # Range between min and max value of ECG data
     axs[0].set_ylim([min(x[0].numpy())*1.1, max(x[0].numpy())*1.1])
-    axs[0].set_ylabel('Amplitude')
+    axs[0].set_ylabel('Amplitude [normalized]')
     axs[0].set_yticks(range(math.floor(min(x[0].numpy())*1.1),math.floor(max(x[0].numpy())*1.1), 1))
     axs[0].set_xticks(range(0, 551, 50))
 
@@ -44,16 +44,17 @@ def generatePlot(x, y, x_hat, y_hat):
         axs[i + 1].set_yticks([0, 1])
         axs[i + 1].set_yticklabels(['0', '1'])
         axs[i + 1].set_xticks([])
+        axs[i + 1].legend(['Ground truth', 'Prediction'], fontsize='x-small', fancybox=False, loc='upper right')
 
 
-    axs[-1].set_xlabel('Time')
+    axs[-1].set_xlabel('Sample [n]')
     axs[-1].set_xticks(range(0, 551, 50))
 
     plt.tight_layout()
     plt.show()
 
 # Set used PC ( Training / Inference / PELU / GRMI)
-used_pc = "Training"
+used_pc = "Inference"
 
 if __name__ == '__main__':
  
@@ -103,7 +104,7 @@ if __name__ == '__main__':
 
         # Initialize model
         model = UNET_1D(in_channels=1, layer_n=512, out_channels=6, kernel_size=5)
-        print(ModelSummary(model, max_depth=-1))
+        print(ModelSummary(model, max_depth=-1))  
 
         # Initialize logger on wandb
         # Source on how to setup wandb logger: https://wandb.ai/HKA-EKG-Signalverarbeitung
@@ -115,13 +116,13 @@ if __name__ == '__main__':
         # Initialize Trainer with wandb logger, using early stopping callback (https://lightning.ai/docs/pytorch/stable/common/early_stopping.html)
         trainer = Trainer(
             max_epochs=max_epochs, 
-            default_root_dir=data_directory, 
+            default_root_dir='model/checkpoint/', #data_directory, 
             accelerator="auto", 
             devices="auto", 
             strategy="auto",
             callbacks=[EarlyStopping(monitor='val_loss', patience=5, mode='min')], 
             logger=wandb_logger)
-
+        
         trainer.fit(model=model, datamodule=dm)
 
         # Finish wandb
