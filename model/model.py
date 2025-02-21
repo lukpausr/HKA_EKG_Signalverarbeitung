@@ -3,14 +3,13 @@ import pandas as pd
 import numpy as np
 import math
 
-from scipy.stats import norm
 from scipy.ndimage import gaussian_filter1d
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
-import torch.optim as optim
+# from torch.utils.data import Dataset
+# import torch.optim as optim
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.model_summary import ModelSummary
 from pytorch_lightning import Trainer
@@ -18,11 +17,13 @@ from pytorch_lightning import Trainer
 import wandb
 from pytorch_lightning.loggers import WandbLogger
 
-from sklearn import metrics
-from sklearn.model_selection import train_test_split
+# from sklearn import metrics
+# from sklearn.model_selection import train_test_split
 
 feature_list = ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
 
+# Custom Dataset for Pytorch
+# Source: https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 class ECG_DataSet(torch.utils.data.Dataset):
     def __init__(self, data_dir: str, label_cols: str = feature_list, data_cols: str = ['raw_data']):
         self.data_dir = data_dir
@@ -32,16 +33,19 @@ class ECG_DataSet(torch.utils.data.Dataset):
 
         # Generate a list containing all file names in directory
         self.file_list = os.listdir(data_dir)
+
         # Read all files in directory and store them in a list
         for file in self.file_list:
+
             # Read data from csv file
             temp_data = pd.read_csv(data_dir + file)
             
-            # add gaussian distribution over peaks with width of 5
+            # add gaussian distribution over peaks with width of 10
+            # reason: the loss function can handle the peaks better when they have a larger range / area for the loss function to work with
             for feature in feature_list:
                 if(feature == 'P-peak' or feature == 'R-peak' or feature == 'T-peak'):
                     
-                    # add gaussian distribution over peaks with width of 5 // use constant to extend data by 0s when filtering with guassian
+                    # add gaussian distribution over peaks with width of 10 // use constant to extend data by 0s when filtering with guassian
                     temp_data[feature] = gaussian_filter1d(np.float64(temp_data[feature]), sigma=10, mode='constant')
                     # normalize between 0 and 1
                     max_val = max(temp_data[feature])
@@ -56,21 +60,27 @@ class ECG_DataSet(torch.utils.data.Dataset):
             # add data to list
             self.data.append(temp_data)
 
+            # Print the amount of loaded files every 1000 files for better overview during loading
             if len(self.data) % 1000 == 0:
                 print(f"DATASET: Loaded {len(self.data)} of {len(self.file_list)} files")
 
+    # Return the length of the dataset
     def __len__(self):
         return len(self.file_list)
     
+    # Return a single data entry using a given index
     def __getitem__(self, idx):
-        # file = pd.read_csv(self.data_dir + self.file_list[idx])
         data_idx = self.data[idx]
-        raw_data = torch.tensor(data_idx[self.data_cols].values).T
-        labels = torch.tensor(data_idx[self.label_cols].values).T
-
-        return raw_data, labels
+        return torch.tensor(data_idx[self.data_cols].values).T, torch.tensor(data_idx[self.label_cols].values).T
+        # raw_data = torch.tensor(data_idx[self.data_cols].values).T
+        # labels = torch.tensor(data_idx[self.label_cols].values).T
+        # return raw_data, labels
     
+# Custom Data Module for Pytorch Lightning
+# Source: https://pytorch-lightning.readthedocs.io/en/1.1.8/introduction_guide.html#data
+# This data module automatically handles the training, test and validation data and we don't have to worry
 class ECG_DataModule(pl.LightningDataModule):
+    
     def __init__(self, data_dir: str, batch_size: int = 1):
         super().__init__()
         self.data_dir = data_dir
@@ -79,12 +89,13 @@ class ECG_DataModule(pl.LightningDataModule):
     def prepare_data(self):
         # download, split, etc...
         # only called on 1 GPU/TPU in distributed
+        # not required because our data is already prepared through the custom dataset
         pass
 
+    # Load the datasets
     def setup(self, stage=None):
 
-        # make assignments here (val/train/test split)
-        # called on every process in DDP
+        # the datasets instances are generated here, depending on the current stage (val/train/test split)
 
         # Assign train/val datasets for use in dataloaders
         if stage == "fit" or stage is None:
@@ -97,6 +108,7 @@ class ECG_DataModule(pl.LightningDataModule):
             self.test_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_test\\')
             pass
 
+    # Define the train dataloader
     def train_dataloader(self):
         return DataLoader(
             dataset=self.train_dataset,
@@ -106,6 +118,7 @@ class ECG_DataModule(pl.LightningDataModule):
             shuffle=True,
         )
 
+    # Define the validation dataloader
     def val_dataloader(self):
         return DataLoader(
             dataset=self.val_dataset,
@@ -115,6 +128,7 @@ class ECG_DataModule(pl.LightningDataModule):
             shuffle=False,
         )
 
+    # Define the test dataloader
     def test_dataloader(self):
         return DataLoader(
             dataset=self.test_dataset,
@@ -125,163 +139,15 @@ class ECG_DataModule(pl.LightningDataModule):
         )
 
 ####################################################################################################
-
-class ECG_Dilineation_EncDec(pl.LightningModule):
-
-    def __init__(
-        self, 
-        in_channels: int,
-        base_channel_size: int,
-        kernel_size: int,
-        stride: int,
-        padding: int,
-        feature_channel_size: int,
-        width: int = 512,
-    ):
-        super().__init__()
-
-        self.in_channels = 1
-        self.feature_channel_size = 1
-
-        self.save_hyperparameters()
-    
-        self.encoder = Encoder(in_channels, base_channel_size, kernel_size, stride, padding)
-        self.decoder = Decoder(in_channels, base_channel_size, feature_channel_size, kernel_size, stride, padding)
-
-        self.example_input_array = torch.rand(1, in_channels, width)
-    
-    def forward(self, x):
-        # The forward function takes an 1d-Array of ECG-Sensor-Data and returns n channels of 1d-Data of the same shape
-        z = self.encoder(x)
-        x = self.decoder(z)
-        return x
-    
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-        return optimizer
-    
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        x = x.float()
-        y = y.float()
-        
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-
-        loss = nn.BCEWithLogitsLoss()(x_hat, y)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
-
-    def test_step(self, batch, batch_idx):
-        x, y = batch
-        x = x.float()
-        y = y.float()
-        
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-
-        loss = nn.BCEWithLogitsLoss()(x_hat, y)
-        self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
-    
-    def validation_step(self, batch, batch_idx):
-        x, y = batch
-        x = x.float()
-        y = y.float()
-        
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-
-        loss = nn.BCEWithLogitsLoss()(x_hat, y)
-        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
-
-####################################################################################################
-
+# Source of removed code
 # https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/08-deep-autoencoders.html
-class Encoder(nn.Module):
-    def __init__(self, in_channels, base_channel_size: int, kernel_size=3, stride=2, padding=1):
-        
-        """Encoder:
-        
-        Args:
-            in_channels (int): Number of input channels
-            out_channels (int): Number of output channels
-            kernel_size (int): Kernel size
-            stride (int): Stride
-            padding (int): Padding
-
-        """        
-        super(Encoder, self).__init__()
-
-        hidden_channels = base_channel_size
-
-        self.example_input_array = torch.rand(1, 512)
-
-        self.net = nn.Sequential(
-            # https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-            nn.Conv1d(in_channels, hidden_channels, kernel_size=3, stride=2, padding=1),                # 512 -> 256
-            nn.ReLU(),                                                                                  # ReLU activation
-            nn.Conv1d(hidden_channels, hidden_channels, kernel_size=3, stride=2, padding=1),            # 256 -> 128
-            nn.ReLU(),                                                                                  # ReLU activation
-            nn.Conv1d(hidden_channels, 2 * hidden_channels, kernel_size=3, stride=2, padding=1),        # 128 -> 64
-            nn.ReLU(),                                                                                  # ReLU activation
-            nn.Conv1d(2 * hidden_channels, 4 * hidden_channels, kernel_size=3, stride=2, padding=1),    # 64 -> 32
-            nn.ReLU(),                                                                                  # ReLU activation
-            nn.Flatten(start_dim=1, end_dim=-1),                                                        # 32 * 4 * hidden_channels -> 32 * 4 * hidden_channels
-            nn.Linear(32 * hidden_channels * 4, 128)                                                    # 32 * 4 * hidden_channels -> 128
-        )
-        
-    def forward(self, x):
-        return self.net(x)
-    
-class Decoder(nn.Module):
-    def __init__(self, in_channels, base_channel_size: int, feature_channel_size: int, kernel_size=3, stride=1, padding=1):
-
-        """Decoder:
-        
-        Args:
-            in_channels (int): Number of input channels
-            out_channels (int): Number of output channels
-            kernel_size (int): Kernel size
-            stride (int): Stride
-            padding (int): Padding
-
-        """
-
-        super(Decoder, self).__init__()
-
-        self.hidden_channels = base_channel_size
-
-        self.linear = nn.Sequential(
-            nn.Linear(128, 32 * 4 * self.hidden_channels),                                                                                       # 128 -> 32 * 4 * hidden_channels
-            nn.ReLU()                                                                                                                       # ReLU activation
-        )
-
-        self.net = nn.Sequential(
-            nn.ConvTranspose1d(4 * self.hidden_channels, 2 * self.hidden_channels, kernel_size=3, stride=2, padding=1, output_padding=1),             # 32 -> 64
-            nn.ReLU(),                                                                                                                      # ReLU activation
-            nn.ConvTranspose1d(2 * self.hidden_channels, self.hidden_channels, kernel_size=3, stride=2, padding=1, output_padding=1),                 # 64 -> 128
-            nn.ReLU(),                                                                                                                      # ReLU activation
-            nn.ConvTranspose1d(self.hidden_channels, self.hidden_channels, kernel_size=3, stride=2, padding=1, output_padding=1),                     # 128 -> 256
-            nn.ReLU(),                                                                                                                      # ReLU activation
-            nn.ConvTranspose1d(self.hidden_channels, in_channels * feature_channel_size, kernel_size=3, stride=2, padding=1, output_padding=1),  # 256 -> 512
-            nn.Sigmoid()                                                                                                                    # Sigmoid activation
-        )
-        
-    def forward(self, x):
-        x = self.linear(x)
-        # print(x.shape)
-        x = torch.reshape(x, (-1, 4 * self.hidden_channels, 32))
-        x = self.net(x)
-        return x
 
 ####################################################################################################
 # From Source https://www.kaggle.com/code/super13579/u-net-1d-cnn-with-pytorch we build a U-Net Implementation using
 # pytorch lightning
 
 # Convolution + BatchNorm + ReLU Block
-# QUESTION: Why is the padding set to 3? Can it be adapted to the kernel size automatically?
+# The order of Relu and Batchnorm is interchangeable and influences the performance and training speed
 class conbr_block(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride):
         super(conbr_block, self).__init__()
@@ -314,7 +180,7 @@ class UNET_1D(pl.LightningModule):
         self.kernel_size = kernel_size
         self.out_channels = out_channels
 
-        # Calculaete padding and Convert padding to int
+        # Calculate padding and convert padding to int
         self.padding = int(((self.kernel_size - 1) / 2))
 
         # Define pooling operations on encoder side
@@ -323,6 +189,7 @@ class UNET_1D(pl.LightningModule):
         self.AvgPool1D3 = nn.AvgPool1d(kernel_size=2, stride=2)
         self.AvgPool1D4 = nn.AvgPool1d(kernel_size=2, stride=2)
 
+        # Factor which can be used to increase the amount of convolutional layers applied, should stay at 1 because larger values do not increase the performance
         factor = 1
 
         # Apply 2 1d-convolutional layers
@@ -527,6 +394,7 @@ class UNET_1D(pl.LightningModule):
 ####################################################################################################
 ####################################################################################################
 
+# Function to generate a plot of the ECG data and the labels
 def generatePlot(x, y, x_hat, y_hat):
     # Print x data (EKG-Data) in matplotlib plot and add the labels as a colored overlay to the plot
     import matplotlib.pyplot as plt
@@ -563,8 +431,6 @@ def generatePlot(x, y, x_hat, y_hat):
 
     plt.tight_layout()
     plt.show()
-
-
 
 # Main
 # Set used PC ( Training / Inference / PELU / GRMI)
@@ -620,48 +486,7 @@ if __name__ == '__main__':
         print(y)
         print(x.shape)
         print(y.shape)
-   
-    if(1==2):
-        dl = dm.train_dataloader()
-        for i in range(10):
-
-            item = dl.dataset.__getitem__(i)
-
-            print("Loading Batch...")
-
-            x, y = item
-            print(x.shape)
-            print(y.shape)
-            
-            # Print x data (EKG-Data) in matplotlib plot and add the labels as a colored overlay to the plot
-            import matplotlib.pyplot as plt
-
-            fig, axs = plt.subplots(7, 1, figsize=(15, 10), sharex=True, gridspec_kw={'height_ratios': [5, 1, 1, 1, 1, 1, 1]})
-            
-            # Plot ECG data
-            axs[0].plot(x[0].numpy(), color='blue')
-            axs[0].set_title('ECG Data')
-            # Range between min and max value of ECG data
-            axs[0].set_ylim([min(x[0].numpy())*1.1, max(x[0].numpy())*1.1])
-            axs[0].set_ylabel('Amplitude')
-            axs[0].set_yticks(range(math.floor(min(x[0].numpy())*1.1),math.floor(max(x[0].numpy())*1.1), 1))
-            axs[0].set_xticks(range(0, 551, 50))
-
-            # Plot labels
-            for i in range(6):
-                axs[i + 1].plot(y[i].numpy(), color='green')
-                axs[i + 1].set_ylim([-0.1, 1.1])
-                axs[i + 1].set_ylabel(feature_list[i])
-                axs[i + 1].set_yticks([0, 1])
-                axs[i + 1].set_yticklabels(['0', '1'])
-                axs[i + 1].set_xticks([])
-
-            axs[-1].set_xlabel('Time')
-            axs[-1].set_xticks(range(0, 551, 50))
-
-            plt.tight_layout()
-            plt.show()
-            
+               
     if(conduct_training):
 
         # Define Data Module containing train, test and validation datasets
@@ -701,8 +526,10 @@ if __name__ == '__main__':
 
         model.to(device)
 
+        # Get test dataloader for later iteration
         dl = dm.test_dataloader()
 
+        # Confusing code was required to generate a plot of the ECG data and the labels...
         for i in range(100):
             x_val, y_val = dl.dataset.__getitem__(i)    
             x_val.resize_(1, 1, 512)
@@ -726,9 +553,12 @@ if __name__ == '__main__':
             x_val = x_val[0].detach()
             y_val = y_val[0].detach()
             y_hat = y_hat[0].detach()
+
             generatePlot(x_val, y_val, x_val, y_hat)
         
-# used source:
+
+
+# used sources:
 # https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/08-deep-autoencoders.html#Building-the-autoencoder
 # https://pytorch-lightning.readthedocs.io/en/1.1.8/introduction_guide.html
 # https://pytorch-lightning.readthedocs.io/en/0.10.0/introduction_guide.html#the-model
