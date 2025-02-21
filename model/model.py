@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.model_summary import ModelSummary
 from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 import wandb
 from pytorch_lightning.loggers import WandbLogger
@@ -278,6 +279,7 @@ class UNET_1D(pl.LightningModule):
     
     def forward(self, x):
 
+        # Debugging print statements
         enablePrint = False
         if enablePrint: print(x.size())
 
@@ -434,7 +436,7 @@ def generatePlot(x, y, x_hat, y_hat):
 
 # Main
 # Set used PC ( Training / Inference / PELU / GRMI)
-used_pc = "Training"
+used_pc = "Inference"
 
 if __name__ == '__main__':
 
@@ -448,7 +450,7 @@ if __name__ == '__main__':
     conduct_test = False
     enable_print = False
     batch_size = 32
-    max_epochs = 20
+    max_epochs = 50
 
     if (used_pc == "Training"):
         data_directory = r"C:\Users\Büro\Documents\Projekt_Lukas\data"
@@ -503,8 +505,15 @@ if __name__ == '__main__':
         # Add batch size to wandb config
         wandb_logger.experiment.config["batch_size"] = batch_size
 
-        # Initialize Trainer with wandb logger
-        trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, accelerator="auto", devices="auto", strategy="auto", logger=wandb_logger)
+        # Initialize Trainer with wandb logger, using early stopping callback (https://lightning.ai/docs/pytorch/stable/common/early_stopping.html)
+        trainer = Trainer(
+            max_epochs=max_epochs, 
+            default_root_dir=data_directory, 
+            accelerator="auto", 
+            devices="auto", 
+            strategy="auto",
+            callbacks=[EarlyStopping(monitor='val_loss', patience=5, mode='min')], 
+            logger=wandb_logger)
 
         #trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, logger=wandb_logger)
         trainer.fit(model=model, datamodule=dm)
@@ -520,7 +529,7 @@ if __name__ == '__main__':
         dm.setup(stage="test")
 
         checkpoint_path_pre = r"\\nas-k2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\HKA_EKG_Signalverarbeitung\HKA-EKG-Signalverarbeitung"
-        checkpoint_path = checkpoint_path_pre + r"\20250216_03\checkpoints\epoch=49-step=69700.ckpt"
+        checkpoint_path = checkpoint_path_pre + r"\20250221_01\checkpoints\epoch=17-step=25092.ckpt"
         model = UNET_1D.load_from_checkpoint(checkpoint_path)
         model.eval()
 
