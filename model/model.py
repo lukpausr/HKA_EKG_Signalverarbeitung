@@ -1,7 +1,10 @@
 import os
 import pandas as pd
+import numpy as np
+import math
 
-import wandb
+from scipy.stats import norm
+from scipy.ndimage import gaussian_filter1d
 
 import torch
 from torch import nn
@@ -12,34 +15,60 @@ import pytorch_lightning as pl
 from pytorch_lightning.utilities.model_summary import ModelSummary
 from pytorch_lightning import Trainer
 
-
+import wandb
 from pytorch_lightning.loggers import WandbLogger
 
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
+feature_list = ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
 
-
-
-# TODO: Tensoren in liste speichern und dann auf Liste zugreifen
 class ECG_DataSet(torch.utils.data.Dataset):
-    def __init__(self, data_dir: str, label_cols: str = ['feature_rpeak'], data_cols: str = ['raw_data']):
+    def __init__(self, data_dir: str, label_cols: str = feature_list, data_cols: str = ['raw_data']):
         self.data_dir = data_dir
         self.label_cols = label_cols
         self.data_cols = data_cols
+        self.data = []
 
         # Generate a list containing all file names in directory
         self.file_list = os.listdir(data_dir)
+        # Read all files in directory and store them in a list
+        for file in self.file_list:
+            # Read data from csv file
+            temp_data = pd.read_csv(data_dir + file)
+            
+            # add gaussian distribution over peaks with width of 5
+            for feature in feature_list:
+                if(feature == 'P-peak' or feature == 'R-peak' or feature == 'T-peak'):
+                    
+                    # add gaussian distribution over peaks with width of 5 // use constant to extend data by 0s when filtering with guassian
+                    temp_data[feature] = gaussian_filter1d(np.float64(temp_data[feature]), sigma=10, mode='constant')
+                    # normalize between 0 and 1
+                    max_val = max(temp_data[feature])
+                    if(max_val > 0):
+                        temp_data[feature] = temp_data[feature] * (1/max_val)
+
+                    # Print Data with matplotlib
+                    #import matplotlib.pyplot as plt
+                    #plt.plot(temp_data[feature])
+                    #plt.show()
+            
+            # add data to list
+            self.data.append(temp_data)
+
+            if len(self.data) % 1000 == 0:
+                print(f"DATASET: Loaded {len(self.data)} of {len(self.file_list)} files")
 
     def __len__(self):
         return len(self.file_list)
     
     def __getitem__(self, idx):
-        file = pd.read_csv(self.data_dir + self.file_list[idx])
-        data = torch.tensor(file[self.data_cols].values).T
-        labels = torch.tensor(file[self.label_cols].values).T
+        # file = pd.read_csv(self.data_dir + self.file_list[idx])
+        data_idx = self.data[idx]
+        raw_data = torch.tensor(data_idx[self.data_cols].values).T
+        labels = torch.tensor(data_idx[self.label_cols].values).T
 
-        return data, labels
+        return raw_data, labels
     
 class ECG_DataModule(pl.LightningDataModule):
     def __init__(self, data_dir: str, batch_size: int = 1):
@@ -242,7 +271,7 @@ class Decoder(nn.Module):
         
     def forward(self, x):
         x = self.linear(x)
-        print(x.shape)
+        # print(x.shape)
         x = torch.reshape(x, (-1, 4 * self.hidden_channels, 32))
         x = self.net(x)
         return x
@@ -258,118 +287,126 @@ class conbr_block(nn.Module):
         super(conbr_block, self).__init__()
 
         self.net = nn.Sequential(
-            nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding=3, bias=True),
-            nn.BatchNorm1d(out_channels),
+            nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding='same', bias=True),
+            # nn.BatchNorm1d(out_channels),
             nn.ReLU(),
+            nn.BatchNorm1d(out_channels),
         )
 
     def forward(self, x):
         return self.net(x)
     
 class UNET_1D(pl.LightningModule):
-    def __init__(self, in_channels, layer_n, out_channels=1, kernel_size=7, depth=3):
+    def __init__(self, in_channels, layer_n, out_channels=1, kernel_size=3):
         super(UNET_1D, self).__init__()
 
         self.save_hyperparameters()
 
-        self.loss = nn.BCEWithLogitsLoss()
-        # self.loss = nn.CrossEntropyLoss()
+        # self.loss = nn.BCEWithLogitsLoss() # 20250214_04
+        # self.loss = nn.CrossEntropyLoss() # 20250214_03
+        self.loss = nn.BCELoss() # 20250214_05 # 20250215_01 # 20250215_02
+    
 
         self.example_input_array = torch.rand(1, in_channels, layer_n)
 
         self.in_channels = in_channels
         self.layer_n = layer_n
         self.kernel_size = kernel_size
-        self.depth = depth
         self.out_channels = out_channels
 
+        # Calculaete padding and Convert padding to int
+        self.padding = int(((self.kernel_size - 1) / 2))
+
         # Define pooling operations on encoder side
-        self.AvgPool1D1 = nn.AvgPool1d(in_channels, stride=2)
-        self.AvgPool1D2 = nn.AvgPool1d(in_channels, stride=2)
-        self.AvgPool1D3 = nn.AvgPool1d(in_channels, stride=2)
-        self.AvgPool1D4 = nn.AvgPool1d(in_channels, stride=2)
+        self.AvgPool1D1 = nn.AvgPool1d(kernel_size=2, stride=2)
+        self.AvgPool1D2 = nn.AvgPool1d(kernel_size=2, stride=2)
+        self.AvgPool1D3 = nn.AvgPool1d(kernel_size=2, stride=2)
+        self.AvgPool1D4 = nn.AvgPool1d(kernel_size=2, stride=2)
+
+        factor = 1
 
         # Apply 2 1d-convolutional layers
         # Input data size: 1 x 512
         # Output data size: 64 x 512
         self.layer1 = nn.Sequential(
-            conbr_block(self.in_channels, self.in_channels * 64, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 64, self.in_channels * 64, self.kernel_size, stride=1),
+            conbr_block(self.in_channels, self.in_channels * 64 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 64 * factor, self.in_channels * 64 * factor, self.kernel_size, stride=1),
         )
 
         # Apply 2 1d-convolutional layers
         # Input data size: 64 x 256
         # Output data size: 128 x 256
         self.layer2 = nn.Sequential(
-            conbr_block(self.in_channels * 64, self.in_channels * 128, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 128, self.in_channels * 128, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 64 * factor, self.in_channels * 128 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 128 * factor, self.in_channels * 128 * factor, self.kernel_size, stride=1),
         )
 
         # Apply 2 1d-convolutional layers
         # Input data size: 128 x 128
         # Output data size: 256 x 128
         self.layer3 = nn.Sequential(
-            conbr_block(self.in_channels * 128, self.in_channels * 256, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 256, self.in_channels * 256, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 128 * factor, self.in_channels * 256 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 256 * factor, self.in_channels * 256 * factor, self.kernel_size, stride=1),
         )
         
         # Apply 2 1d-convolutional layers
         # Input data size: 256 x 64
         # Output data size: 512 x 64
         self.layer4 = nn.Sequential(
-            conbr_block(self.in_channels * 256, self.in_channels * 512, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 512, self.in_channels * 512, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 256 * factor, self.in_channels * 512 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 512 * factor, self.in_channels * 512 * factor, self.kernel_size, stride=1),
         )
 
         # Apply 2 1d-convolutional layers
         # Input data size: 512 x 32
         # Output data size: 1024 x 32
         self.layer5 = nn.Sequential(
-            conbr_block(self.in_channels * 512, self.in_channels * 1024, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 1024, self.in_channels * 1024, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 512 * factor, self.in_channels * 1024 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 1024 * factor, self.in_channels * 1024 * factor, self.kernel_size, stride=1),
         )
 
         # Transposed convolutional layers
         # Input data size: 1024 x 32
         # Output data size: 512 x 64
         self.layer5T = nn.Sequential(
-            nn.ConvTranspose1d(self.in_channels * 1024, self.in_channels * 512, self.kernel_size, stride=2, padding=3, output_padding=1),
+            nn.ConvTranspose1d(self.in_channels * 1024 * factor, self.in_channels * 512 * factor, self.kernel_size, stride=2, padding=self.padding, output_padding=1),
         )
 
         # Double Convolutional layer and transposed convolutional layer
         # Input data size: 1024 x 64
         # Output data size: 256 x 128
         self.layer4T = nn.Sequential(
-            conbr_block(self.in_channels * 1024, self.in_channels * 512, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 512, self.in_channels * 256, self.kernel_size, stride=1),
-            nn.ConvTranspose1d(self.in_channels * 256, self.in_channels * 256, self.kernel_size, stride=2, padding=3, output_padding=1),
+            conbr_block(self.in_channels * 1024 * factor, self.in_channels * 512 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 512 * factor, self.in_channels * 256 * factor, self.kernel_size, stride=1),
+            nn.ConvTranspose1d(self.in_channels * 256 * factor, self.in_channels * 256 * factor, self.kernel_size, stride=2, padding=self.padding, output_padding=1),
         )
 
         # Double Convolutional layer and transposed convolutional layer
         # Input data size: 512 x 128
         # Output data size: 128 x 256
         self.layer3T = nn.Sequential(
-            conbr_block(self.in_channels * 512, self.in_channels * 256, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 256, self.in_channels * 128, self.kernel_size, stride=1),
-            nn.ConvTranspose1d(self.in_channels * 128, self.in_channels * 128, self.kernel_size, stride=2, padding=3, output_padding=1),
+            conbr_block(self.in_channels * 512 * factor, self.in_channels * 256 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 256 * factor, self.in_channels * 128 * factor, self.kernel_size, stride=1),
+            nn.ConvTranspose1d(self.in_channels * 128 * factor, self.in_channels * 128 * factor, self.kernel_size, stride=2, padding=self.padding, output_padding=1),
         )
 
         # Double Convolutional layer and transposed convolutional layer
         # Input data size: 256 x 256
         # Output data size: 64 x 512
         self.layer2T = nn.Sequential(
-            conbr_block(self.in_channels * 256, self.in_channels * 128, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 128, self.in_channels * 64, self.kernel_size, stride=1),
-            nn.ConvTranspose1d(self.in_channels * 64, self.in_channels * 64, self.kernel_size, stride=2, padding=3, output_padding=1),
+            conbr_block(self.in_channels * 256 * factor, self.in_channels * 128 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 128 * factor, self.in_channels * 64 * factor, self.kernel_size, stride=1),
+            nn.ConvTranspose1d(self.in_channels * 64 * factor, self.in_channels * 64 * factor, self.kernel_size, stride=2, padding=self.padding, output_padding=1),
         )
 
         # Double Convolutional layer to output dimension
         # Input data size: 128 x 512
         # Output data size: out_channels x 512
         self.layer1Out = nn.Sequential(
-            conbr_block(self.in_channels * 128, self.in_channels * 64, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 64, self.in_channels, self.kernel_size, stride=1),
-            nn.Conv1d(self.in_channels, self.out_channels, kernel_size=self.kernel_size, stride=1, padding=3),
+            conbr_block(self.in_channels * 128 * factor, self.in_channels * 64 * factor, self.kernel_size, stride=1),
+            conbr_block(self.in_channels * 64 * factor, self.out_channels, self.kernel_size, stride=1),
+            # conbr_block(self.in_channels * 64 * factor, self.in_channels, self.kernel_size, stride=1),
+            # nn.Conv1d(self.in_channels, self.out_channels, kernel_size=self.kernel_size, stride=1, padding='same'),
         )
     
     def forward(self, x):
@@ -445,8 +482,9 @@ class UNET_1D(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.2, patience=20, min_lr=5e-5)
-        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
+        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.2, patience=20, min_lr=5e-5)
+        # return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
+        return optimizer
     
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -489,25 +527,92 @@ class UNET_1D(pl.LightningModule):
 ####################################################################################################
 ####################################################################################################
 
+def generatePlot(x, y, x_hat, y_hat):
+    # Print x data (EKG-Data) in matplotlib plot and add the labels as a colored overlay to the plot
+    import matplotlib.pyplot as plt
+
+    print(x.shape)
+    print(y.shape)
+    print(x_hat.shape)
+    print(y_hat.shape)
+
+    fig, axs = plt.subplots(7, 1, figsize=(15, 10), sharex=True, gridspec_kw={'height_ratios': [5, 1, 1, 1, 1, 1, 1]})
+
+    # Plot ECG data
+    axs[0].plot(x[0].numpy(), color='blue')
+    axs[0].set_title('ECG Data')
+    # Range between min and max value of ECG data
+    axs[0].set_ylim([min(x[0].numpy())*1.1, max(x[0].numpy())*1.1])
+    axs[0].set_ylabel('Amplitude')
+    axs[0].set_yticks(range(math.floor(min(x[0].numpy())*1.1),math.floor(max(x[0].numpy())*1.1), 1))
+    axs[0].set_xticks(range(0, 551, 50))
+
+    # Plot labels
+    for i in range(6):
+        axs[i + 1].plot(y[i].numpy(), color='green')
+        axs[i + 1].plot(y_hat[i].numpy(), color='blue')
+        axs[i + 1].set_ylim([-0.1, 1.1])
+        axs[i + 1].set_ylabel(feature_list[i])
+        axs[i + 1].set_yticks([0, 1])
+        axs[i + 1].set_yticklabels(['0', '1'])
+        axs[i + 1].set_xticks([])
+
+
+    axs[-1].set_xlabel('Time')
+    axs[-1].set_xticks(range(0, 551, 50))
+
+    plt.tight_layout()
+    plt.show()
+
+
+
 # Main
+# Set used PC ( Training / Inference / PELU / GRMI)
+used_pc = "Training"
 
 if __name__ == '__main__':
 
-    import os
+    import os 
     os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
+    # Set seed for reproducibility
     pl.seed_everything(42)
 
-    data_directory = r"D:\SynologyDrive\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\data"
-    # data_directory = r"\\NAS-K2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV"
+    conduct_training = False
+    conduct_test = False
     enable_print = False
     batch_size = 32
     max_epochs = 20
-    
-    conduct_training = True
 
-    #print(torch.cuda_is_available())
-    
+    if (used_pc == "Training"):
+        data_directory = r"C:\Users\Büro\Documents\Projekt_Lukas\data"
+        conduct_training = True
+        conduct_test = False
+    if (used_pc == "Inference"):
+        data_directory = r"C:\Users\Büro\Documents\Projekt_Lukas\data"
+        conduct_training = False
+        conduct_test = True
+    if (used_pc == "PELU"):
+        data_directory = r"D:\SynologyDrive\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\data"
+    if (used_pc == "GRMI"):
+        data_directory = r"..."  
+
+    print(torch.__version__)
+    print(torch.version.cuda)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('Using device:', device)
+    print()
+
+    #Additional Info when using cuda
+    if device.type == 'cuda':
+        print(torch.cuda.get_device_name(0))
+        print('Memory Usage:')
+        print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3,1), 'GB')
+        print('Cached:   ', round(torch.cuda.memory_reserved(0)/1024**3,1), 'GB')
+
+        torch.set_float32_matmul_precision('high')
+  
     if enable_print:
         test_dataset = ECG_DataSet(data_dir=data_directory+'\\pd_dataset_train\\')
         x, y = test_dataset.__getitem__(0)
@@ -515,18 +620,55 @@ if __name__ == '__main__':
         print(y)
         print(x.shape)
         print(y.shape)
+   
+    if(1==2):
+        dl = dm.train_dataloader()
+        for i in range(10):
 
-    # Define Data Module containing train, test and validation datasets
-    dm = ECG_DataModule(data_dir=data_directory, batch_size=batch_size)
+            item = dl.dataset.__getitem__(i)
 
-    # trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, accelerator="auto", devices="auto", strategy="auto")
+            print("Loading Batch...")
 
-    #model = ECG_Dilineation_EncDec(in_channels=1, base_channel_size=8, kernel_size=3, stride=2, padding=1, feature_channel_size=1)
-    #print(ModelSummary(model, max_depth=-1))
+            x, y = item
+            print(x.shape)
+            print(y.shape)
+            
+            # Print x data (EKG-Data) in matplotlib plot and add the labels as a colored overlay to the plot
+            import matplotlib.pyplot as plt
 
+            fig, axs = plt.subplots(7, 1, figsize=(15, 10), sharex=True, gridspec_kw={'height_ratios': [5, 1, 1, 1, 1, 1, 1]})
+            
+            # Plot ECG data
+            axs[0].plot(x[0].numpy(), color='blue')
+            axs[0].set_title('ECG Data')
+            # Range between min and max value of ECG data
+            axs[0].set_ylim([min(x[0].numpy())*1.1, max(x[0].numpy())*1.1])
+            axs[0].set_ylabel('Amplitude')
+            axs[0].set_yticks(range(math.floor(min(x[0].numpy())*1.1),math.floor(max(x[0].numpy())*1.1), 1))
+            axs[0].set_xticks(range(0, 551, 50))
+
+            # Plot labels
+            for i in range(6):
+                axs[i + 1].plot(y[i].numpy(), color='green')
+                axs[i + 1].set_ylim([-0.1, 1.1])
+                axs[i + 1].set_ylabel(feature_list[i])
+                axs[i + 1].set_yticks([0, 1])
+                axs[i + 1].set_yticklabels(['0', '1'])
+                axs[i + 1].set_xticks([])
+
+            axs[-1].set_xlabel('Time')
+            axs[-1].set_xticks(range(0, 551, 50))
+
+            plt.tight_layout()
+            plt.show()
+            
     if(conduct_training):
 
-        model = UNET_1D(in_channels=1, layer_n=512, out_channels=1, kernel_size=7, depth=2)
+        # Define Data Module containing train, test and validation datasets
+        print("Initializing Data Module...")
+        dm = ECG_DataModule(data_dir=data_directory, batch_size=batch_size)
+
+        model = UNET_1D(in_channels=1, layer_n=512, out_channels=6, kernel_size=5)
         print(ModelSummary(model, max_depth=-1))
 
         # Initialize logger on wandb
@@ -537,13 +679,55 @@ if __name__ == '__main__':
         wandb_logger.experiment.config["batch_size"] = batch_size
 
         # Initialize Trainer with wandb logger
-        trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, logger=wandb_logger)
+        trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, accelerator="auto", devices="auto", strategy="auto", logger=wandb_logger)
+
+        #trainer = Trainer(max_epochs=max_epochs, default_root_dir=data_directory, logger=wandb_logger)
         trainer.fit(model=model, datamodule=dm)
 
         # Finish wandb
         wandb.finish()
 
+    if(conduct_test):
 
+        # Define Data Module containing train, test and validation datasets
+        print("Initializing Data Module...")
+        dm = ECG_DataModule(data_dir=data_directory, batch_size=batch_size)
+        dm.setup(stage="test")
+
+        checkpoint_path_pre = r"\\nas-k2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\HKA_EKG_Signalverarbeitung\HKA-EKG-Signalverarbeitung"
+        checkpoint_path = checkpoint_path_pre + r"\20250216_03\checkpoints\epoch=49-step=69700.ckpt"
+        model = UNET_1D.load_from_checkpoint(checkpoint_path)
+        model.eval()
+
+        model.to(device)
+
+        dl = dm.test_dataloader()
+
+        for i in range(100):
+            x_val, y_val = dl.dataset.__getitem__(i)    
+            x_val.resize_(1, 1, 512)
+            y_val.resize_(1, 6, 512)
+
+            x_val = x_val.float()
+            y_val = y_val.float()
+
+            x_val = x_val.to(device)
+            y_val = y_val.to(device)
+
+            print(x_val.shape)
+            print(y_val.shape)
+
+            y_hat = model(x_val)
+
+            y_hat = y_hat.cpu()
+            x_val = x_val.cpu()
+            y_val = y_val.cpu()
+
+            x_val = x_val[0].detach()
+            y_val = y_val[0].detach()
+            y_hat = y_hat[0].detach()
+            generatePlot(x_val, y_val, x_val, y_hat)
+        
 # used source:
 # https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/08-deep-autoencoders.html#Building-the-autoencoder
 # https://pytorch-lightning.readthedocs.io/en/1.1.8/introduction_guide.html
