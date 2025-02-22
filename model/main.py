@@ -39,12 +39,13 @@ def generatePlot(x, y, x_hat, y_hat):
     for i in range(6):
         axs[i + 1].plot(y[i].numpy(), color='green')
         axs[i + 1].plot(y_hat[i].numpy(), color='blue')
+        axs[i + 1].plot(abs(y[i].numpy() - y_hat[i].numpy()), color='red', linestyle='--')
         axs[i + 1].set_ylim([-0.1, 1.1])
         axs[i + 1].set_ylabel(Param.feature_list[i])
         axs[i + 1].set_yticks([0, 1])
         axs[i + 1].set_yticklabels(['0', '1'])
         axs[i + 1].set_xticks([])
-        axs[i + 1].legend(['Ground truth', 'Prediction'], fontsize='x-small', fancybox=False, loc='upper right')
+        axs[i + 1].legend(['Ground truth', 'Prediction', '|Difference|'], fontsize='x-small', fancybox=False, loc='upper right')
 
 
     axs[-1].set_xlabel('Sample [n]')
