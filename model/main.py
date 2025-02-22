@@ -18,12 +18,6 @@ from model import UNET_1D
 
 # Function to generate a plot of the ECG data and the labels
 def generatePlot(x, y, x_hat, y_hat):
-    # Print x data (EKG-Data) in matplotlib plot and add the labels as a colored overlay to the plot
-    #print(x.shape)
-    #print(y.shape)
-    #print(x_hat.shape)
-    #print(y_hat.shape)
-
     fig, axs = plt.subplots(7, 1, figsize=(15, 10), sharex=True, gridspec_kw={'height_ratios': [5, 1, 1, 1, 1, 1, 1]})
 
     # Plot ECG data
@@ -136,6 +130,8 @@ if __name__ == '__main__':
         dm = ECG_DataModule(data_dir=data_directory, batch_size=batch_size)
         dm.setup(stage="test")
 
+        # Load model from checkpoint
+        # Best model currently available: 20250221_01
         checkpoint_path_pre = r"\\nas-k2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\HKA_EKG_Signalverarbeitung\HKA-EKG-Signalverarbeitung"
         checkpoint_path = checkpoint_path_pre + r"\20250221_01\checkpoints\epoch=17-step=25092.ckpt"
         model = UNET_1D.load_from_checkpoint(checkpoint_path)
