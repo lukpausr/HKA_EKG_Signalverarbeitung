@@ -41,11 +41,16 @@ def generatePlot(x, y, x_hat, y_hat):
         axs[i + 1].set_xticks([])
         axs[i + 1].legend(['Ground truth', 'Prediction', '|Difference|'], fontsize='x-small', fancybox=False, loc='upper right')
 
-
     axs[-1].set_xlabel('Sample [n]')
     axs[-1].set_xticks(range(0, 551, 50))
 
     plt.tight_layout()
+
+    #save_img_path = r"\\nas-k2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\HKA_EKG_Signalverarbeitung\images"
+    #os.listdir(save_img_path)
+    #number_of_images = len(os.listdir(save_img_path))
+    #plt.savefig(save_img_path + r"\plot_" + str(number_of_images) + ".png")
+    
     plt.show()
 
 # Set used PC ( Training / Inference / PELU / GRMI)
@@ -143,7 +148,7 @@ if __name__ == '__main__':
         dl = dm.test_dataloader()
 
         # Confusing code was required to generate a plot of the ECG data and the labels...
-        for i in range(100):
+        for i in range(200):
             x_val, y_val = dl.dataset.__getitem__(i)    
             x_val.resize_(1, 1, 512)
             y_val.resize_(1, 6, 512)
