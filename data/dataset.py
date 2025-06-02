@@ -7,12 +7,12 @@ import pandas as pd
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
-from parameters import Param
+# from parameters import Param TODO: Delete this import if not needed in the future
 
 # Custom Dataset for Pytorch
 # Source: https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 class ECG_DataSet(torch.utils.data.Dataset):
-    def __init__(self, data_dir: str, label_cols: str = Param.feature_list, data_cols: str = ['raw_data']):
+    def __init__(self, data_dir: str, label_cols: str = None, data_cols: str = ['raw_data']):
         self.data_dir = data_dir
         self.label_cols = label_cols
         self.data_cols = data_cols
@@ -29,7 +29,8 @@ class ECG_DataSet(torch.utils.data.Dataset):
             
             # add gaussian distribution over peaks with width of 10
             # reason: the loss function can handle the peaks better when they have a larger range / area for the loss function to work with
-            for feature in Param.feature_list:
+            # for feature in Param.feature_list: TODO: Delete this comment if not needed in the future
+            for feature in self.label_cols:
                 if(feature == 'P-peak' or feature == 'R-peak' or feature == 'T-peak'):
                     
                     # add gaussian distribution over peaks with width of 10 // use constant to extend data by 0s when filtering with guassian

@@ -6,17 +6,18 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
 # from parameters import Param
-from dataset import ECG_DataSet
+from data.dataset import ECG_DataSet
 
 # Custom Data Module for Pytorch Lightning
 # Source: https://pytorch-lightning.readthedocs.io/en/1.1.8/introduction_guide.html#data
 # This data module automatically handles the training, test and validation data and we don't have to worry
 class ECG_DataModule(pl.LightningDataModule):
     
-    def __init__(self, data_dir: str, batch_size: int = 1):
+    def __init__(self, data_dir, batch_size=1, feature_list=None):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.feature_list = feature_list
 
     def prepare_data(self):
         # download, split, etc...
@@ -31,13 +32,13 @@ class ECG_DataModule(pl.LightningDataModule):
 
         # Assign train/val datasets for use in dataloaders
         if stage == "fit" or stage is None:
-            self.train_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_train\\')
-            self.val_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_val\\')
+            self.train_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_train\\', label_cols=self.feature_list)
+            self.val_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_val\\', label_cols=self.feature_list)
             pass
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test" or stage is None:
-            self.test_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_test\\')
+            self.test_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_test\\', label_cols=self.feature_list)
             pass
 
     # Define the train dataloader

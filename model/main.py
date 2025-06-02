@@ -13,7 +13,7 @@ from pytorch_lightning.utilities.model_summary import ModelSummary
 import matplotlib.pyplot as plt
 
 from parameters import Param
-from datamodule import ECG_DataModule
+from data.datamodule import ECG_DataModule
 from model import UNET_1D
 
 # Function to generate a plot of the ECG data and the labels
@@ -95,7 +95,10 @@ if __name__ == '__main__':
         print('Cached:   ', round(torch.cuda.memory_reserved(0)/1024**3,1), 'GB')
 
         torch.set_float32_matmul_precision('high')
-                
+
+
+    ##### done
+
     if(conduct_training):
 
         # Define Data Module containing train, test and validation datasets
