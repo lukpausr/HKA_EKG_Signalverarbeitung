@@ -1,0 +1,28 @@
+# Path configuration
+path_to_data: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung_Data\data
+path_to_models: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung_Data\models
+path_to_matlab_data: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung_Data\data\matlab_data\records500
+
+# Data preprocessing configuration
+source_feature_list: ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
+number_of_augmentations: 5      # augmentations per sample
+normalization_method: 'min-max' # Options: 'min-max', 'z-score'
+
+# Project seed configuration for reproducibility
+seed: 42
+
+# Data Module configuration
+num_workers: 2 # not used right now
+feature_list: ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
+
+# Model configuration (for training without using Hyperparameter Tuning)
+batch_size: 32
+max_epochs: 50
+learning_rate: 0.001
+
+# Wandb configuration
+wandb_project_name: HKA-EKG-Signalverarbeitung
+wandb_experiment_name: 1-lead
+
+# Hypereparameter Tuning configuration
+number_of_trials: 20
