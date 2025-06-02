@@ -5,7 +5,7 @@ path_to_matlab_data: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung
 
 # Data preprocessing configuration
 source_feature_list: ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
-number_of_augmentations: 5      # augmentations per sample
+number_of_augmentations: 6      # augmentations per sample
 normalization_method: 'min-max' # Options: 'min-max', 'z-score'
 
 # Project seed configuration for reproducibility
