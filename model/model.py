@@ -4,6 +4,7 @@
 import torch
 from torch import nn
 import pytorch_lightning as pl
+from torchmetrics.classification import BinaryJaccardIndex
 
 # from parameters import Param 
 
@@ -39,6 +40,7 @@ class UNET_1D(pl.LightningModule):
         # self.loss = nn.BCEWithLogitsLoss() # 20250214_04
         # self.loss = nn.CrossEntropyLoss() # 20250214_03
         self.loss = nn.BCELoss() # 20250214_05 # 20250215_01 # 20250215_02 # 20250221_01
+        self.jaccard = BinaryJaccardIndex(threshold=0.5)
     
         self.example_input_array = torch.rand(1, in_channels, layer_n)
 
@@ -224,6 +226,9 @@ class UNET_1D(pl.LightningModule):
 
         loss = self.loss(x_hat, y)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        self.jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+
         return loss
     
     def test_step(self, batch, batch_idx):
@@ -235,6 +240,9 @@ class UNET_1D(pl.LightningModule):
 
         loss = self.loss(x_hat, y)
         self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        self.jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -246,6 +254,9 @@ class UNET_1D(pl.LightningModule):
 
         loss = self.loss(x_hat, y)
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        self.jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+
         return loss
 
     def on_test_epoch_end(self):
@@ -253,20 +264,57 @@ class UNET_1D(pl.LightningModule):
         print('-----------------------------------')
 
     def postprocess_prediction(self, y):
-        y_ = (y > 0.5).float()
-        y[0] = y_[0]
-        y[2] = y_[2]
-        y[4] = y_[4]
-        # For channels 1, 3, 5, set the local maximums with confidence > 0.7 to 1
-        for ch_idx in [1, 3, 5]:
-            high_conf_indices = (y[ch_idx] > 0.7).nonzero(as_tuple=True)[0]
-            # Find local maxima among high confidence indices
-            for idx in high_conf_indices:
-                # Check if idx is a local maximum
-                left = y[ch_idx][idx - 1] if idx > 0 else float('-inf')
-                right = y[ch_idx][idx + 1] if idx < y[ch_idx].shape[0] - 1 else float('-inf')
-                if y[ch_idx][idx] >= left and y[ch_idx][idx] >= right:
-                    y[ch_idx].zero_()
-                    y[ch_idx][idx] = 1.0
-        # Return post-processed tensor
+        # Check if y is batched (shape: [batch_size, channels, length])
+        if y.dim() == 3:
+            # Iterate over batch
+            for i in range(y.shape[0]):
+                y_ = (y[i] > 0.5).float()
+                y[i, 0] = y_[0]
+                y[i, 2] = y_[2]
+                y[i, 4] = y_[4]
+                # For channels 1, 3, 5, set the local maximums with confidence > 0.7 to 1
+                for ch_idx in [1, 3, 5]:
+                    high_conf_indices = (y[i, ch_idx] > 0.7).nonzero(as_tuple=True)[0]
+                    for idx in high_conf_indices:
+                        left = y[i, ch_idx][idx - 1] if idx > 0 else float('-inf')
+                        right = y[i, ch_idx][idx + 1] if idx < y[i, ch_idx].shape[0] - 1 else float('-inf')
+                        if y[i, ch_idx][idx] >= left and y[i, ch_idx][idx] >= right:
+                            y[i, ch_idx].zero_()
+                            y[i, ch_idx][idx] = 1.0
+        else:
+            y_ = (y > 0.5).float()
+            y[0] = y_[0]
+            y[2] = y_[2]
+            y[4] = y_[4]
+            for ch_idx in [1, 3, 5]:
+                high_conf_indices = (y[ch_idx] > 0.7).nonzero(as_tuple=True)[0]
+                for idx in high_conf_indices:
+                    left = y[ch_idx][idx - 1] if idx > 0 else float('-inf')
+                    right = y[ch_idx][idx + 1] if idx < y[ch_idx].shape[0] - 1 else float('-inf')
+                    if y[ch_idx][idx] >= left and y[ch_idx][idx] >= right:
+                        y[ch_idx].zero_()
+                        y[ch_idx][idx] = 1.0
         return y
+    
+    def postprocess_ground_truth(self, y):
+        # Ground truth: Channels 1, 3, 5, set local maxima where value equals 1
+        # Check if y is batched (shape: [batch_size, channels, length])
+        if y.dim() == 3:
+            # Iterate over batch
+            for i in range(y.shape[0]):
+                for ch_idx in [1, 3, 5]:
+                    true_indices = (y[i, ch_idx] == 1).nonzero(as_tuple=True)[0]
+                    y[i, ch_idx].zero_()
+                    y[i, ch_idx][true_indices] = 1.0
+        else:
+            # Single sample
+            for ch_idx in [1, 3, 5]:
+                true_indices = (y[ch_idx] == 1).nonzero(as_tuple=True)[0]
+                y[ch_idx].zero_()
+                y[ch_idx][true_indices] = 1.0
+        return y    
+
+    def compute_jaccard_index(self, y_true, y_pred):
+        jaccard = BinaryJaccardIndex()
+        print(jaccard(y_pred, y_true))
+        return jaccard(y_pred, y_true)
