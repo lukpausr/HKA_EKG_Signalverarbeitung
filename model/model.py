@@ -251,3 +251,22 @@ class UNET_1D(pl.LightningModule):
     def on_test_epoch_end(self):
         print('Test Epoch End')
         print('-----------------------------------')
+
+    def postprocess_prediction(self, y):
+        y_ = (y > 0.5).float()
+        y[0] = y_[0]
+        y[2] = y_[2]
+        y[4] = y_[4]
+        # For channels 1, 3, 5, set the local maximums with confidence > 0.7 to 1
+        for ch_idx in [1, 3, 5]:
+            high_conf_indices = (y[ch_idx] > 0.7).nonzero(as_tuple=True)[0]
+            # Find local maxima among high confidence indices
+            for idx in high_conf_indices:
+                # Check if idx is a local maximum
+                left = y[ch_idx][idx - 1] if idx > 0 else float('-inf')
+                right = y[ch_idx][idx + 1] if idx < y[ch_idx].shape[0] - 1 else float('-inf')
+                if y[ch_idx][idx] >= left and y[ch_idx][idx] >= right:
+                    y[ch_idx].zero_()
+                    y[ch_idx][idx] = 1.0
+        # Return post-processed tensor
+        return y
