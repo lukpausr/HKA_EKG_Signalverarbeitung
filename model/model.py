@@ -287,7 +287,7 @@ class UNET_1D(pl.LightningModule):
             y[2] = y_[2]
             y[4] = y_[4]
             for ch_idx in [1, 3, 5]:
-                high_conf_indices = (y[ch_idx] > 0.7).nonzero(as_tuple=True)[0]
+                high_conf_indices = (y[ch_idx] > 0.5).nonzero(as_tuple=True)[0]
                 for idx in high_conf_indices:
                     left = y[ch_idx][idx - 1] if idx > 0 else float('-inf')
                     right = y[ch_idx][idx + 1] if idx < y[ch_idx].shape[0] - 1 else float('-inf')

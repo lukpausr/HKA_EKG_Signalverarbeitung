@@ -166,3 +166,4 @@ HKA-EKG-Signalverarbeitung/
 #.idea/
 
 .vscode/settings.json
+lightning_logs/*
