@@ -53,8 +53,7 @@ def greedyMatchingAlgorithm(onsets_true, onsets_pred, offsets_true, offsets_pred
     return matched_onsets, matched_offsets 
 
 def deviationPerCategory(y_true, y_pred, print_debug=False):
-    # Calculate the distance in time between onset true and predictede values
-    # Find the OnSets (positive Flanke) of category [0,2,4] and 
+    # Calculate the distance in time between onset true and predicted values
     onsets_true = []
     onsets_pred = []
     offsets_true = []
@@ -133,15 +132,15 @@ def deviationPerCategory(y_true, y_pred, print_debug=False):
     # Returns an array for each element, containing the values for category 1 at indice 0 up to category 6 at indice 5
     return onsets_true, onsets_pred, offsets_true, offsets_pred, onset_diffs_all, offset_diffs_all, filtered_onset_diffs_all, filtered_offset_diffs_all
 
-def plot_onset_offset_histograms(onset, offset, value_range=(-0.1, 0.1), fs=512, feature_names=None):
+def plot_onset_offset_histograms(onset, offset, value_range_ms=(-100, 100), fs=512, feature_names=None):
 
-    onset_time = [np.array(v) * (1/fs) for v in onset]
-    offset_time = [np.array(v) * (1/fs) for v in offset]
+    onset_time = [np.array(v) * (1000/fs) for v in onset]
+    offset_time = [np.array(v) * (1000/fs) for v in offset]
 
     plt.figure(figsize=(18, 10))
     for cat in range(len(onset)):
-        onset_filtered = onset_time[cat][(onset_time[cat] >= value_range[0]) & (onset_time[cat] <= value_range[1])]
-        offset_filtered = offset_time[cat][(offset_time[cat] >= value_range[0]) & (offset_time[cat] <= value_range[1])]
+        onset_filtered = onset_time[cat][(onset_time[cat] >= value_range_ms[0]) & (onset_time[cat] <= value_range_ms[1])]
+        offset_filtered = offset_time[cat][(offset_time[cat] >= value_range_ms[0]) & (offset_time[cat] <= value_range_ms[1])]
 
         var_onset = np.var(onset_filtered) if len(onset_filtered) > 0 else 0
         std_onset = np.std(onset_filtered) if len(onset_filtered) > 0 else 0
@@ -154,22 +153,22 @@ def plot_onset_offset_histograms(onset, offset, value_range=(-0.1, 0.1), fs=512,
 
         # Onset plot
         plt.subplot(2, len(onset), cat + 1)
-        plt.hist(onset_filtered, bins=onset_bins, color='skyblue', edgecolor='black', range=value_range)
+        plt.hist(onset_filtered, bins=onset_bins, color='skyblue', edgecolor='black', range=value_range_ms)
         title = f'Onset Cat {cat}'
         if feature_names:
             title = f'Onset {feature_names[cat]}'
-        plt.title(f'{title}\nVar: {var_onset:.5f} $s^2$\nStd: {std_onset:.5f} $s$', fontsize=10)
-        plt.xlabel('Diff [s]')
+        plt.title(f'{title}\nVar: {var_onset:.2f} $ms^2$\nStd: {std_onset:.2f} $ms$', fontsize=10)
+        plt.xlabel('Diff [ms]')
         plt.ylabel('Count')
 
         # Offset plot
         plt.subplot(2, len(onset), cat + 1 + len(onset))
-        plt.hist(offset_filtered, bins=offset_bins, color='salmon', edgecolor='black', range=value_range)
+        plt.hist(offset_filtered, bins=offset_bins, color='salmon', edgecolor='black', range=value_range_ms)
         title = f'Offset Cat {cat}'
         if feature_names:
             title = f'Offset {feature_names[cat]}'
-        plt.title(f'{title}\nVar: {var_offset:.5f} $s^2$\nStd: {std_offset:.5f} $s$', fontsize=10)
-        plt.xlabel('Diff [s]')
+        plt.title(f'{title}\nVar: {var_offset:.2f} $ms^2$\nStd: {std_offset:.2f} $ms$', fontsize=10)
+        plt.xlabel('Diff [ms]')
         plt.ylabel('Count')
 
     plt.tight_layout()

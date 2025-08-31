@@ -16,7 +16,7 @@ num_workers: 2 # not used right now
 feature_list: ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
 
 # Model configuration (for training without using Hyperparameter Tuning)
-batch_size: 32
+batch_size: 64
 max_epochs: 50
 learning_rate: 0.001
 

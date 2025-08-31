@@ -4,7 +4,11 @@
 import torch
 from torch import nn
 import pytorch_lightning as pl
+from torchmetrics import Metric
 from torchmetrics.classification import BinaryJaccardIndex
+from matplotlib import pyplot as plt
+
+import numpy as np
 
 # from parameters import Param 
 
@@ -14,10 +18,305 @@ from torchmetrics.classification import BinaryJaccardIndex
 # Source of removed code
 # https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/08-deep-autoencoders.html
 
+# Multi Tolerance Wrapper
+class MultiToleranceWrapper(nn.Module):
+
+    def __init__(self, model, tol_ms: float = [5, 10, 40, 150]):
+        super().__init__()
+
+    def update(self, y_true, y_pred):
+        pass
+
+    def compute(self):
+        pass
+
+    def reset(self):
+        pass
+
+
+# Custom metrics class for evaluation
+# Find help on https://pytorch-lightning.readthedocs.io/en/0.10.0/metrics.html#
+class CustomMetrics(Metric):
+
+    is_differentiable: bool = False
+    full_state_update: bool = True
+
+    def __init__(self, tol_ms: float = 40, sampling_rate: int = 512):
+        super().__init__()
+        self.tol_ms = tol_ms
+        self.sampling_rate = sampling_rate
+
+        self.add_state ("tp_onset", default=torch.tensor([0 for _ in range(6)]), dist_reduce_fx=self.custom_reduction)
+        self.add_state ("fp_onset", default=torch.tensor([0 for _ in range(6)]), dist_reduce_fx=self.custom_reduction)
+        self.add_state ("fn_onset", default=torch.tensor([0 for _ in range(6)]), dist_reduce_fx=self.custom_reduction)
+        self.add_state ("tp_offset", default=torch.tensor([0 for _ in range(6)]), dist_reduce_fx=self.custom_reduction)
+        self.add_state ("fp_offset", default=torch.tensor([0 for _ in range(6)]), dist_reduce_fx=self.custom_reduction)
+        self.add_state ("fn_offset", default=torch.tensor([0 for _ in range(6)]), dist_reduce_fx=self.custom_reduction)
+
+        # regular instance variables (non state)
+        for i in range(6):
+            setattr(self, f"onset_differences_ms_category_{i}", [])
+            setattr(self, f"offset_differences_ms_category_{i}", [])
+
+    def custom_reduction(self, tensor):
+        return torch.sum(tensor, dim=1)
+
+    def update(self, y_true, y_pred):
+        y_true_batch_cpu = y_true.cpu().numpy()
+        y_pred_batch_cpu = y_pred.cpu().numpy()
+
+        # Temporary metric state for array generation
+        tp_onset = torch.tensor([ 0 for _ in range(6)])
+        fp_onset = torch.tensor([ 0 for _ in range(6)])
+        fn_onset = torch.tensor([ 0 for _ in range(6)])
+        tp_offset = torch.tensor([ 0 for _ in range(6)])
+        fp_offset = torch.tensor([ 0 for _ in range(6)])
+        fn_offset = torch.tensor([ 0 for _ in range(6)])
+
+        for y_true, y_pred in zip(y_true_batch_cpu, y_pred_batch_cpu):
+            # Calculate the true and predicted onsets and offsets
+            onsets_true, onsets_pred, offsets_true, offsets_pred = self.onset_offset_extraction(y_true, y_pred)
+
+            # For each category, calculate which onsets and offsets matches together
+            for category in range(6):
+
+                matched_onsets, matched_offsets = self.greedyMatchingAlgorithm(
+                    onsets_true[category].tolist(), 
+                    onsets_pred[category].tolist(), 
+                    offsets_true[category].tolist(), 
+                    offsets_pred[category].tolist()
+                    )
+
+                onset_differences = np.array([pred - true for true, pred in matched_onsets]) if matched_onsets else np.array([]).tolist()
+                offset_differences = np.array([pred - true for true, pred in matched_offsets]) if matched_offsets else np.array([]).tolist()
+
+                onset_differences_ms = np.array([diff * (1000 / self.sampling_rate) for diff in onset_differences])
+                offset_differences_ms = np.array([diff * (1000 / self.sampling_rate) for diff in offset_differences])
+
+                # Calculate metrics TP, FP, FN and filter using given tolerance for the current category
+                tp_onset[category] += np.sum((onset_differences_ms >= -self.tol_ms) & (onset_differences_ms <= self.tol_ms))
+                fp_onset[category] += np.sum(onset_differences_ms > self.tol_ms)
+                fn_onset[category] += np.sum(onset_differences_ms < -self.tol_ms)
+                tp_offset[category] += np.sum((offset_differences_ms >= -self.tol_ms) & (offset_differences_ms <= self.tol_ms))
+                fp_offset[category] += np.sum(offset_differences_ms > self.tol_ms)
+                fn_offset[category] += np.sum(offset_differences_ms < -self.tol_ms)
+
+                match category:
+                    case 0:
+                        self.onset_differences_ms_category_0.append(onset_differences_ms)
+                        self.offset_differences_ms_category_0.append(offset_differences_ms)
+                    case 1:
+                        self.onset_differences_ms_category_1.append(onset_differences_ms)
+                        self.offset_differences_ms_category_1.append(offset_differences_ms)
+                    case 2:
+                        self.onset_differences_ms_category_2.append(onset_differences_ms)
+                        self.offset_differences_ms_category_2.append(offset_differences_ms)
+                    case 3:
+                        self.onset_differences_ms_category_3.append(onset_differences_ms)
+                        self.offset_differences_ms_category_3.append(offset_differences_ms)
+                    case 4:
+                        self.onset_differences_ms_category_4.append(onset_differences_ms)
+                        self.offset_differences_ms_category_4.append(offset_differences_ms)
+                    case 5:
+                        self.onset_differences_ms_category_5.append(onset_differences_ms)
+                        self.offset_differences_ms_category_5.append(offset_differences_ms)
+
+        self.tp_onset += tp_onset.detach().clone().cuda()
+        self.fp_onset += fp_onset.detach().clone().cuda()
+        self.fn_onset += fn_onset.detach().clone().cuda()
+        self.tp_offset += tp_offset.detach().clone().cuda()
+        self.fp_offset += fp_offset.detach().clone().cuda()
+        self.fn_offset += fn_offset.detach().clone().cuda()
+
+    def compute(self):
+
+        tp_onset = torch.tensor([0 for _ in range(6)])
+        fp_onset = torch.tensor([0 for _ in range(6)])
+        fn_onset = torch.tensor([0 for _ in range(6)])
+        tp_offset = torch.tensor([0 for _ in range(6)])
+        fp_offset = torch.tensor([0 for _ in range(6)])
+        fn_offset = torch.tensor([0 for _ in range(6)])
+        sensitivity_onset = torch.tensor([0 for _ in range(6)])
+        ppv_onset = torch.tensor([0 for _ in range(6)])
+        f1_onset = torch.tensor([0 for _ in range(6)])
+        sensitivity_offset = torch.tensor([0 for _ in range(6)])
+        ppv_offset = torch.tensor([0 for _ in range(6)])
+        f1_offset = torch.tensor([0 for _ in range(6)])
+
+        # Compute metrics for each category individually
+        for category in range(6):
+            tp_onset[category], fp_onset[category], fn_onset[category] = int(self.tp_onset[category]), int(self.fp_onset[category]), int(self.fn_onset[category])
+            tp_offset[category], fp_offset[category], fn_offset[category] = int(self.tp_offset[category]), int(self.fp_offset[category]), int(self.fn_offset[category])
+            sensitivity_onset[category] = tp_onset[category] / (tp_onset[category] + fn_onset[category]) if (tp_onset[category] + fn_onset[category]) > 0 else 0
+            sensitivity_offset[category] = tp_offset[category] / (tp_offset[category] + fn_offset[category]) if (tp_offset[category] + fn_offset[category]) > 0 else 0
+            ppv_onset[category] = tp_onset[category] / (tp_onset[category] + fp_onset[category]) if (tp_onset[category] + fp_onset[category]) > 0 else 0
+            ppv_offset[category] = tp_offset[category] / (tp_offset[category] + fp_offset[category]) if (tp_offset[category] + fp_offset[category]) > 0 else 0
+            f1_onset[category] = 2 * (ppv_onset[category] * sensitivity_onset[category]) / (ppv_onset[category] + sensitivity_onset[category]) if (ppv_onset[category] + sensitivity_onset[category]) > 0 else 0
+            f1_offset[category] = 2 * (ppv_offset[category] * sensitivity_offset[category]) / (ppv_offset[category] + sensitivity_offset[category]) if (ppv_offset[category] + sensitivity_offset[category]) > 0 else 0
+
+        # Compute global metrics
+        tp_onset_global = tp_onset.sum()
+        fp_onset_global = fp_onset.sum()
+        fn_onset_global = fn_onset.sum()
+        tp_offset_global = tp_offset.sum()
+        fp_offset_global = fp_offset.sum()
+        fn_offset_global = fn_offset.sum()
+        sensitivity_onset_global = tp_onset_global / (tp_onset_global + fn_onset_global) if (tp_onset_global + fn_onset_global) > 0 else 0
+        sensitivity_offset_global = tp_offset_global / (tp_offset_global + fn_offset_global) if (tp_offset_global + fn_offset_global) > 0 else 0
+        ppv_onset_global = tp_onset_global / (tp_onset_global + fp_onset_global) if (tp_onset_global + fp_onset_global) > 0 else 0
+        ppv_offset_global = tp_offset_global / (tp_offset_global + fp_offset_global) if (tp_offset_global + fp_offset_global) > 0 else 0
+        f1_onset_global = 2 * (ppv_onset_global * sensitivity_onset_global) / (ppv_onset_global + sensitivity_onset_global) if (ppv_onset_global + sensitivity_onset_global) > 0 else 0
+        f1_offset_global = 2 * (ppv_offset_global * sensitivity_offset_global) / (ppv_offset_global + sensitivity_offset_global) if (ppv_offset_global + sensitivity_offset_global) > 0 else 0
+
+        self.plot_onset_offset_histograms()
+
+        return {
+            "tp_onset_global" : tp_onset_global,
+            "fp_onset_global" : fp_onset_global,
+            "fn_onset_global" : fn_onset_global,
+            "tp_offset_global" : tp_offset_global,
+            "fp_offset_global" : fp_offset_global,
+            "fn_offset_global" : fn_offset_global,
+            "sensitivity_onset_global" : sensitivity_onset_global,
+            "sensitivity_offset_global" : sensitivity_offset_global,
+            "ppv_onset_global" : ppv_onset_global,
+            "ppv_offset_global" : ppv_offset_global,
+            "f1_onset_global" : f1_onset_global,
+            "f1_offset_global" : f1_offset_global
+            # "tp_onset": tp_onset,
+            # "fp_onset": fp_onset,
+            # "fn_onset": fn_onset,
+            # "tp_offset": tp_offset,
+            # "fp_offset": fp_offset,
+            # "fn_offset": fn_offset,
+            # "sensitivity_onset": sensitivity_onset,
+            # "sensitivity_offset": sensitivity_offset,
+            # "ppv_onset": ppv_onset,
+            # "ppv_offset": ppv_offset,
+            # "f1_onset": f1_onset,
+            # "f1_offset": f1_offset,
+        }
+
+    # Onset and Offset Extraction
+    def onset_offset_extraction(self, y_true, y_pred):
+
+        onsets_true = []
+        onsets_pred = []
+        offsets_true = []
+        offsets_pred = []
+
+        # For each category (fiducial), calculate onsets and offsets and save them
+        # in a list, with 6 lists inside the list
+        for idx, cat in enumerate(range(6)):
+            y_t = y_true[cat]
+            y_p = y_pred[cat]
+
+            onset_true = (y_t[1:] > y_t[:-1]) & (y_t[1:] == 1)
+            onset_pred = (y_p[1:] > y_p[:-1]) & (y_p[1:] == 1)
+            onsets_true.append(np.where(onset_true)[0] + 1)     # +1 to align with original indices
+            onsets_pred.append(np.where(onset_pred)[0] + 1)
+
+            offset_true = (y_t[1:] < y_t[:-1]) & (y_t[1:] == 0)
+            offset_pred = (y_p[1:] < y_p[:-1]) & (y_p[1:] == 0)
+            offsets_true.append(np.where(offset_true)[0] + 1)
+            offsets_pred.append(np.where(offset_pred)[0] + 1)
+
+        return onsets_true, onsets_pred, offsets_true, offsets_pred
+
+    # Greedy matching algorithm to pair true and predicted onsets/offsets
+    def greedyMatchingAlgorithm(self, onsets_true, onsets_pred, offsets_true, offsets_pred):
+
+        matched_onsets = []
+        matched_offsets = []
+        
+        # Match onsets
+        for true_onset in onsets_true:
+            if len(onsets_pred) == 0:
+                break
+            closest_pred = min(onsets_pred, key=lambda x: abs(x - true_onset))
+            matched_onsets.append((true_onset, closest_pred))
+            onsets_pred.remove(closest_pred)
+        
+        # Match offsets
+        for true_offset in offsets_true:
+            if len(offsets_pred) == 0:
+                break
+            closest_pred = min(offsets_pred, key=lambda x: abs(x - true_offset))
+            matched_offsets.append((true_offset, closest_pred))
+            offsets_pred.remove(closest_pred)
+        
+        return matched_onsets, matched_offsets 
+
+    # Plot onset and offset value histograms
+    def plot_onset_offset_histograms(self, value_range_ms=(-100, 100), fs=512, feature_names=None):
+
+        # for category in range(6):
+        #     if(len(self.onset_differences_ms[category]) > 0): self.onset_differences_ms[category].extend(self.onset_differences_ms[category].cpu().numpy().tolist())
+        #     if(len(self.offset_differences_ms[category]) > 0): self.offset_differences_ms[category].extend(self.offset_differences_ms[category].cpu().numpy().tolist())
+
+        # # onset = [v.cpu().numpy() for v in onset if len(v) > 0]
+        # # offset = [v.cpu().numpy() for v in offset if len(v) > 0]
+
+        # onset_time = [np.array(v) * (1000/fs) for v in onset]
+        # offset_time = [np.array(v) * (1000/fs) for v in offset]
+
+        plt.figure(figsize=(18, 10))
+        for category in range(6):
+
+            onset_attr = f"onset_differences_ms_category_{category}"
+            offset_attr = f"offset_differences_ms_category_{category}"
+
+            onset_data = getattr(self, onset_attr, [])
+            offset_data = getattr(self, offset_attr, [])
+
+            onset_data = np.concatenate(onset_data) if len(onset_data) > 0 else np.array([])
+            offset_data = np.concatenate(offset_data) if len(offset_data) > 0 else np.array([])
+
+            onset_time = np.array([v * (1000/fs) for v in onset_data.tolist()])
+            offset_time = np.array([v * (1000/fs) for v in offset_data.tolist()])
+
+            print(onset_time)
+            print(offset_time)
+
+            onset_filtered = onset_time[(onset_time >= value_range_ms[0]) & (onset_time <= value_range_ms[1])]
+            offset_filtered = offset_time[(offset_time >= value_range_ms[0]) & (offset_time <= value_range_ms[1])]
+
+            var_onset = np.var(onset_filtered) if len(onset_filtered) > 0 else 0
+            std_onset = np.std(onset_filtered) if len(onset_filtered) > 0 else 0
+
+            var_offset = np.var(offset_filtered) if len(offset_filtered) > 0 else 0
+            std_offset = np.std(offset_filtered) if len(offset_filtered) > 0 else 0
+
+            onset_bins = int(np.ceil(np.sqrt(len(onset_filtered)))) if len(onset_filtered) > 0 else 1
+            offset_bins = int(np.ceil(np.sqrt(len(offset_filtered)))) if len(offset_filtered) > 0 else 1
+
+            # Onset plot
+            plt.subplot(2, 6, category + 1)
+            plt.hist(onset_filtered, bins=onset_bins, color='skyblue', edgecolor='black', range=value_range_ms)
+            title = f'Onset Cat {category}'
+            if feature_names:
+                title = f'Onset {feature_names[category]}'
+            plt.title(f'{title}\nVar: {var_onset:.2f} $ms^2$\nStd: {std_onset:.2f} $ms$', fontsize=10)
+            plt.xlabel('Diff [ms]')
+            plt.ylabel('Count')
+
+            # Offset plot
+            plt.subplot(2, 6, category + 7)
+            plt.hist(offset_filtered, bins=offset_bins, color='salmon', edgecolor='black', range=value_range_ms)
+            title = f'Offset Cat {category}'
+            if feature_names:
+                title = f'Offset {feature_names[category]}'
+            plt.title(f'{title}\nVar: {var_offset:.2f} $ms^2$\nStd: {std_offset:.2f} $ms$', fontsize=10)
+            plt.xlabel('Diff [ms]')
+            plt.ylabel('Count')
+
+        plt.tight_layout()
+        plt.show()
 
 # Convolution + BatchNorm + ReLU Block (conbr)
 # The order of Relu and Batchnorm is interchangeable and influences the performance and training speed
 class conbr_block(nn.Module):
+
     def __init__(self, in_channels, out_channels, kernel_size, stride):
         super(conbr_block, self).__init__()
 
@@ -30,8 +329,10 @@ class conbr_block(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-    
+
+# U-Net 1D Model
 class UNET_1D(pl.LightningModule):
+
     def __init__(self, in_channels, layer_n, out_channels=1, kernel_size=3):
         super(UNET_1D, self).__init__()
 
@@ -41,7 +342,9 @@ class UNET_1D(pl.LightningModule):
         # self.loss = nn.CrossEntropyLoss() # 20250214_03
         self.loss = nn.BCELoss() # 20250214_05 # 20250215_01 # 20250215_02 # 20250221_01
         self.jaccard = BinaryJaccardIndex(threshold=0.5)
-    
+
+        self.custom_metrics = CustomMetrics()
+
         self.example_input_array = torch.rand(1, in_channels, layer_n)
 
         self.in_channels = in_channels
@@ -242,6 +545,7 @@ class UNET_1D(pl.LightningModule):
         self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         self.jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.custom_metrics.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
 
         return loss
     
@@ -260,6 +564,15 @@ class UNET_1D(pl.LightningModule):
         return loss
 
     def on_test_epoch_end(self):
+
+        self.jaccard.compute()
+        self.log('test_jaccard', self.jaccard, prog_bar=True, logger=True)
+        self.jaccard.reset()
+
+        results = self.custom_metrics.compute()
+        self.log_dict(results, prog_bar=True, logger=True)
+        self.custom_metrics.reset()
+
         print('Test Epoch End')
         print('-----------------------------------')
 
