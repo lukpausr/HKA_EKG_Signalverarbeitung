@@ -73,7 +73,7 @@ class ECG_DataSet(torch.utils.data.Dataset):
             arr = arr / max_vals
             sample[peak_features] = arr
 
-        return torch.tensor(sample[self.data_cols].values).T, torch.tensor(sample[self.label_cols].values).T
+        return torch.tensor(sample[self.data_cols].values, dtype=torch.float32).T, torch.tensor(sample[self.label_cols].values, dtype=torch.float32).T
 
         # data_idx = self.data[idx]
         # return torch.tensor(data_idx[self.data_cols].values).T, torch.tensor(data_idx[self.label_cols].values).T

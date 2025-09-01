@@ -656,8 +656,6 @@ class UNET_1D(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         x, y = batch
-        x = x.float()
-        y = y.float()
 
         x_hat = self.forward(x)
 
@@ -672,8 +670,6 @@ class UNET_1D(pl.LightningModule):
     
     def test_step(self, batch, batch_idx):
         x, y = batch
-        x = x.float()
-        y = y.float()
 
         x_hat = self.forward(x)
 
@@ -687,8 +683,6 @@ class UNET_1D(pl.LightningModule):
     
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        x = x.float()
-        y = y.float()
 
         x_hat = self.forward(x)
 
@@ -770,3 +764,72 @@ class UNET_1D(pl.LightningModule):
         jaccard = BinaryJaccardIndex()
         # print(jaccard(y_pred, y_true))
         return jaccard(y_pred, y_true)
+    
+# Wrapper for UNET Models (crucial for trying diferent architectures without a hassle)
+class EKG_Segmentation_Module(pl.LightningModule):
+
+    def __init__(self, model, learning_rate=1e-3, optimizer_name='Adam', weight_decay=0.0, scheduler_name='StepLR'):
+        super().__init__()
+
+        # Model
+        self.model = model
+
+        # Hyperparameters
+        self.learning_rate = learning_rate
+        self.optimizer_name = optimizer_name
+        self.weight_decay = weight_decay
+        self.scheduler_name = scheduler_name
+
+        self.criterion = nn.BCELoss()
+
+        # Save hyperparameters!
+        self.save_hyperparameters()
+
+    def configure_optimizers(self):
+        """
+        Configures and returns the optimizer for training the model.
+
+        Returns:
+            torch.optim.Optimizer: An optimizer initialized with specified learning rate and weight decay.
+        """
+        if self.optimizer_name == "Adam":
+            optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        elif self.optimizer_name == "SGD":
+            optimizer = torch.optim.SGD(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay, momentum=0.9)
+        elif self.optimizer_name == "AdamW":
+            optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+
+        if self.scheduler_name == "StepLR":
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+            return [optimizer], [scheduler]
+        elif self.scheduler_name == "CosineAnnealingLR":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs)
+            return [optimizer], [scheduler]
+        else:
+            return optimizer
+
+    def forward(self, x):
+        """
+        Forward pass through the model.
+        Args:
+            x (Tensor): Input tensor.
+        Returns:
+            Tensor: Output tensor after passing through the model.
+        """
+        return self.model(x)
+    
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        x = x.float()
+        y = y.float()
+
+        x_hat = self.forward(x)
+
+        # Logg loss 
+        loss = self.loss(x_hat, y)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        # Update Jaccard metric / intersection over Union
+        self.log('train_jaccard', self.jaccard(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y)), prog_bar=True, logger=True)
+
+        return loss
