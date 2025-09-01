@@ -20,26 +20,63 @@ import numpy as np
 
 # Multi Tolerance Wrapper
 class MultiToleranceWrapper(nn.Module):
+    """
+    A wrapper module for handling multiple tolerance-based metrics in parallel.
+    This class manages a set of `CustomMetrics` instances, each configured with a different tolerance (in milliseconds).
+    It provides unified methods to update, compute, and reset all metrics simultaneously.
+    Args:
+        tol_ms (list[float], optional): List of tolerance values in milliseconds. Defaults to [5, 10, 40, 150].
+        sampling_rate (int, optional): The sampling rate of the signal. Defaults to 512.
+    """
 
-    def __init__(self, model, tol_ms: float = [5, 10, 40, 150]):
+    def __init__(self,  tol_ms: float = [5, 10, 40, 150], sampling_rate: int = 512):
+        """
+        Initializes the MultiToleranceWrapper with multiple CustomMetrics, each for a specified tolerance.
+        Args:
+            model (nn.Module): The underlying model.
+            tol_ms (list[float], optional): List of tolerance values in milliseconds.
+            sampling_rate (int, optional): The sampling rate of the signal.
+        """
         super().__init__()
+        self.metrics = nn.ModuleDict({
+            f"tolerance_{tol_m}ms": CustomMetrics(tol_ms=tol_m, sampling_rate=sampling_rate) for tol_m in tol_ms
+        })
 
     def update(self, y_true, y_pred):
-        pass
+        """
+        Updates all contained metrics with new predictions and ground truth values.
+        Args:
+            y_true: Ground truth labels.
+            y_pred: Predicted labels.
+        """
+        for metric in self.metrics.values():
+            metric.update(y_true, y_pred)
 
     def compute(self):
-        pass
+        """
+        Computes and aggregates the results from all contained metrics.
+        Returns:
+            dict: A dictionary containing computed metrics for each tolerance.
+        """
+        results = {}
+        for name, metric in self.metrics.items():
+            computed_metric = metric.compute()
+            results.update({f"{name}_{k}": v.float() if isinstance(v, torch.Tensor) else v for k, v in computed_metric.items()})
+        return results
 
     def reset(self):
-        pass
-
+        """
+        Resets all contained metrics to their initial state.
+        """
+        for metric in self.metrics.values():
+            metric.reset()
 
 # Custom metrics class for evaluation
 # Find help on https://pytorch-lightning.readthedocs.io/en/0.10.0/metrics.html#
 class CustomMetrics(Metric):
 
     is_differentiable: bool = False
-    full_state_update: bool = True
+    full_state_update: bool = False
 
     def __init__(self, tol_ms: float = 40, sampling_rate: int = 512):
         super().__init__()
@@ -248,17 +285,7 @@ class CustomMetrics(Metric):
         return matched_onsets, matched_offsets 
 
     # Plot onset and offset value histograms
-    def plot_onset_offset_histograms(self, value_range_ms=(-100, 100), fs=512, feature_names=None):
-
-        # for category in range(6):
-        #     if(len(self.onset_differences_ms[category]) > 0): self.onset_differences_ms[category].extend(self.onset_differences_ms[category].cpu().numpy().tolist())
-        #     if(len(self.offset_differences_ms[category]) > 0): self.offset_differences_ms[category].extend(self.offset_differences_ms[category].cpu().numpy().tolist())
-
-        # # onset = [v.cpu().numpy() for v in onset if len(v) > 0]
-        # # offset = [v.cpu().numpy() for v in offset if len(v) > 0]
-
-        # onset_time = [np.array(v) * (1000/fs) for v in onset]
-        # offset_time = [np.array(v) * (1000/fs) for v in offset]
+    def plot_onset_offset_histograms(self, value_range_ms=(-250, 250), fs=512, feature_names=None):
 
         plt.figure(figsize=(18, 10))
         for category in range(6):
@@ -275,11 +302,12 @@ class CustomMetrics(Metric):
             onset_time = np.array([v * (1000/fs) for v in onset_data.tolist()])
             offset_time = np.array([v * (1000/fs) for v in offset_data.tolist()])
 
-            print(onset_time)
-            print(offset_time)
-
+            # Filter out everything above +/- value_range, because those values are not feasible and probably existant due to mismatched GT/Prediction pairs
             onset_filtered = onset_time[(onset_time >= value_range_ms[0]) & (onset_time <= value_range_ms[1])]
             offset_filtered = offset_time[(offset_time >= value_range_ms[0]) & (offset_time <= value_range_ms[1])]
+
+            # onset_filtered = onset_time
+            # offset_filtered = offset_time
 
             var_onset = np.var(onset_filtered) if len(onset_filtered) > 0 else 0
             std_onset = np.std(onset_filtered) if len(onset_filtered) > 0 else 0
@@ -296,6 +324,20 @@ class CustomMetrics(Metric):
             title = f'Onset Cat {category}'
             if feature_names:
                 title = f'Onset {feature_names[category]}'
+            # Plot vertical lines dependent on current tolerance
+            plt.axvline(x=self.tol_ms, color='red', linestyle='--', alpha=0.7, label='Tolerance')
+            plt.axvline(x=-self.tol_ms, color='red', linestyle='--', alpha=0.7)
+            # Shade the area between the tolerance lines
+            plt.fill_betweenx(y=[0, plt.ylim()[1]], x1=self.tol_ms, x2=-self.tol_ms, color='red', alpha=0.1)
+            # Calculate the percentage of values within tolerances compared to all data
+            if len(onset_filtered) > 0:
+                within_tolerance = onset_filtered[(onset_filtered <= self.tol_ms) & (onset_filtered >= -self.tol_ms)]
+                percentage_within = (len(within_tolerance) / len(onset_filtered)) * 100
+            else:
+                percentage_within = 0
+            # Add information centered above the plot
+            plt.text(0, plt.ylim()[1] * 0.99, f'Within Tolerance: {percentage_within:.2f}%', ha='center', va='top', fontsize=10, color='red')
+            # Add the title and labels
             plt.title(f'{title}\nVar: {var_onset:.2f} $ms^2$\nStd: {std_onset:.2f} $ms$', fontsize=10)
             plt.xlabel('Diff [ms]')
             plt.ylabel('Count')
@@ -306,18 +348,98 @@ class CustomMetrics(Metric):
             title = f'Offset Cat {category}'
             if feature_names:
                 title = f'Offset {feature_names[category]}'
+            plt.axvline(x=self.tol_ms, color='red', linestyle='--', alpha=0.7, label='Tolerance')
+            plt.axvline(x=-self.tol_ms, color='red', linestyle='--', alpha=0.7)
+            plt.fill_betweenx(y=[0, plt.ylim()[1]], x1=self.tol_ms, x2=-self.tol_ms, color='red', alpha=0.1)
+            if len(offset_filtered) > 0:
+                within_tolerance = offset_filtered[(offset_filtered <= self.tol_ms) & (offset_filtered >= -self.tol_ms)]
+                percentage_within = (len(within_tolerance) / len(offset_filtered)) * 100
+            else:
+                percentage_within = 0
+            plt.text(0, plt.ylim()[1] * 0.99, f'Within Tolerance: {percentage_within:.2f}%', ha='center', va='top', fontsize=10, color='red')
             plt.title(f'{title}\nVar: {var_offset:.2f} $ms^2$\nStd: {std_offset:.2f} $ms$', fontsize=10)
             plt.xlabel('Diff [ms]')
             plt.ylabel('Count')
 
+        plt.suptitle(f'Onset/Offset Differences - Sampling Rate: {self.sampling_rate} Hz, Tolerance: {self.tol_ms} ms', fontsize=14)
         plt.tight_layout()
         plt.show()
+
+        # Preparation for CDF Plot (not working yet)
+        # for category in range(6):
+
+        #     onset_attr = f"onset_differences_ms_category_{category}"
+        #     offset_attr = f"offset_differences_ms_category_{category}"
+
+        #     onset_data = getattr(self, onset_attr, [])
+        #     offset_data = getattr(self, offset_attr, [])
+
+        #     onset_data = np.concatenate(onset_data) if len(onset_data) > 0 else np.array([])
+        #     offset_data = np.concatenate(offset_data) if len(offset_data) > 0 else np.array([])
+
+        #     onset_time = np.array([v * (1000/fs) for v in onset_data.tolist()])
+        #     offset_time = np.array([v * (1000/fs) for v in offset_data.tolist()])
+
+        #     # Filter out everything above +/- value_range, because those values are not feasible and probably existant due to mismatched GT/Prediction pairs
+        #     onset_filtered = onset_time[(onset_time >= value_range_ms[0]) & (onset_time <= value_range_ms[1])]
+        #     offset_filtered = offset_time[(offset_time >= value_range_ms[0]) & (offset_time <= value_range_ms[1])]
+
+        #     # Plot a CDF (cumulative distribution function) plot of the errors using the given tolerance
+        #     plt.subplot(2, 2, 1)
+        #     errors = np.sort(np.abs(onset_filtered))
+        #     cdf = np.arange(1, len(errors) + 1) / len(errors) if len(errors) > 0 else np.array([])
+        #     plt.figure(figsize=(16, 10))
+        #     plt.plot(errors, cdf, label="CDF of values outside tolerance")
+        #     prop = np.mean(errors <= self.tol_ms) * 100 if len(errors) > 0 else 0
+        #     plt.axvline(x=self.tol_ms, color='red', linestyle='--', alpha=0.7, label='Tolerance')
+        #     plt.text(self.tol_ms, 0.05, f'Tolerance ({self.tol_ms} ms)', rotation=90, color='red', va='center', ha='right')
+        #     plt.xlabel('Absolute Error [ms]')
+        #     plt.ylabel('Cumulative Probability')
+        #     plt.title(f'Cumulative Distribution Function (CDF) of Onset Errors\nPercentage within Tolerance: {prop:.2f}%', fontsize=14)
+
+        #     # now for offset
+        #     plt.subplot(2, 2, 2)
+        #     errors = np.sort(np.abs(offset_filtered))
+        #     cdf = np.arange(1, len(errors) + 1) / len(errors) if len(errors) > 0 else np.array([])
+        #     plt.figure(figsize=(16, 10))
+        #     plt.plot(errors, cdf, label="CDF of values outside tolerance")
+        #     prop = np.mean(errors <= self.tol_ms) * 100 if len(errors) > 0 else 0
+        #     plt.axvline(x=self.tol_ms, color='red', linestyle='--', alpha=0.7, label='Tolerance')
+        #     plt.text(self.tol_ms, 0.05, f'Tolerance ({self.tol_ms} ms)', rotation=90, color='red', va='center', ha='right')
+        #     plt.xlabel('Absolute Error [ms]')
+        #     plt.ylabel('Cumulative Probability')
+        #     plt.title(f'Cumulative Distribution Function (CDF) of Offset Errors\nPercentage within Tolerance: {prop:.2f}%', fontsize=14)
+
+        #     plt.legend()
+        #     plt.grid()
+        #     plt.show()
 
 # Convolution + BatchNorm + ReLU Block (conbr)
 # The order of Relu and Batchnorm is interchangeable and influences the performance and training speed
 class conbr_block(nn.Module):
+    """
+    A convolutional block consisting of Conv1d, ReLU activation, and BatchNorm1d.
+    
+    This block applies a 1D convolution followed by ReLU activation and batch normalization,
+    which is a common pattern in convolutional neural networks for feature extraction.
+    
+    Args:
+        in_channels (int): Number of input channels for the Conv1d layer.
+        out_channels (int): Number of output channels for the Conv1d layer.
+        kernel_size (int or tuple): Size of the convolutional kernel.
+        stride (int or tuple): Stride of the convolution.
+    """
 
     def __init__(self, in_channels, out_channels, kernel_size, stride):
+        """
+        Initializes the conbr_block module.
+        Args:
+            in_channels (int): Number of input channels for the Conv1d layer.
+            out_channels (int): Number of output channels for the Conv1d layer.
+            kernel_size (int or tuple): Size of the convolutional kernel.
+            stride (int or tuple): Stride of the convolution.
+        The block consists of a 1D convolutional layer followed by a ReLU activation and batch normalization.
+        """
         super(conbr_block, self).__init__()
 
         self.net = nn.Sequential(
@@ -328,6 +450,15 @@ class conbr_block(nn.Module):
         )
 
     def forward(self, x):
+        """
+        Performs a forward pass through the neural network.
+
+        Args:
+            x (torch.Tensor): Input tensor to the network.
+
+        Returns:
+            torch.Tensor: Output tensor after passing through the network layers.
+        """
         return self.net(x)
 
 # U-Net 1D Model
@@ -341,9 +472,12 @@ class UNET_1D(pl.LightningModule):
         # self.loss = nn.BCEWithLogitsLoss() # 20250214_04
         # self.loss = nn.CrossEntropyLoss() # 20250214_03
         self.loss = nn.BCELoss() # 20250214_05 # 20250215_01 # 20250215_02 # 20250221_01
+
+        # Intersection over Union metric
         self.jaccard = BinaryJaccardIndex(threshold=0.5)
 
-        self.custom_metrics = CustomMetrics()
+        # Custom metrics
+        self.multi_custom_metrics = MultiToleranceWrapper(tol_ms=[5, 10, 40, 150], sampling_rate=512)
 
         self.example_input_array = torch.rand(1, in_channels, layer_n)
 
@@ -527,10 +661,12 @@ class UNET_1D(pl.LightningModule):
 
         x_hat = self.forward(x)
 
+        # Logg loss 
         loss = self.loss(x_hat, y)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        self.jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        # Update Jaccard metric / intersection over Union
+        self.log('train_jaccard', self.jaccard(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y)), prog_bar=True, logger=True)
 
         return loss
     
@@ -545,7 +681,7 @@ class UNET_1D(pl.LightningModule):
         self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         self.jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
-        self.custom_metrics.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.multi_custom_metrics.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
 
         return loss
     
@@ -559,19 +695,22 @@ class UNET_1D(pl.LightningModule):
         loss = self.loss(x_hat, y)
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        self.jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        # Update Jaccard metric / intersection over Union
+        self.log('val_jaccard', self.jaccard(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y)), prog_bar=True, logger=True)
 
         return loss
 
     def on_test_epoch_end(self):
 
+        # Compute intersection over Union
         self.jaccard.compute()
         self.log('test_jaccard', self.jaccard, prog_bar=True, logger=True)
         self.jaccard.reset()
 
-        results = self.custom_metrics.compute()
+        # Compute custom metrics
+        results = self.multi_custom_metrics.compute()
         self.log_dict(results, prog_bar=True, logger=True)
-        self.custom_metrics.reset()
+        self.multi_custom_metrics.reset()
 
         print('Test Epoch End')
         print('-----------------------------------')
@@ -629,5 +768,5 @@ class UNET_1D(pl.LightningModule):
 
     def compute_jaccard_index(self, y_true, y_pred):
         jaccard = BinaryJaccardIndex()
-        print(jaccard(y_pred, y_true))
+        # print(jaccard(y_pred, y_true))
         return jaccard(y_pred, y_true)
