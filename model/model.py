@@ -760,10 +760,10 @@ class UNET_1D(pl.LightningModule):
                 y[ch_idx][true_indices] = 1.0
         return y    
 
-    def compute_jaccard_index(self, y_true, y_pred):
-        jaccard = BinaryJaccardIndex()
-        # print(jaccard(y_pred, y_true))
-        return jaccard(y_pred, y_true)
+    # def compute_jaccard_index(self, y_true, y_pred):
+    #     jaccard = BinaryJaccardIndex()
+    #     # print(jaccard(y_pred, y_true))
+    #     return jaccard(y_pred, y_true)
     
 # Wrapper for UNET Models (crucial for trying diferent architectures without a hassle)
 class EKG_Segmentation_Module(pl.LightningModule):
@@ -784,6 +784,13 @@ class EKG_Segmentation_Module(pl.LightningModule):
 
         # Save hyperparameters!
         self.save_hyperparameters()
+
+        # Metrics
+        self.train_jaccard = BinaryJaccardIndex()
+        self.val_jaccard = BinaryJaccardIndex()
+        self.test_jaccard = BinaryJaccardIndex()
+
+        self.multi_tolerance_metrics = MultiToleranceWrapper()
 
     def configure_optimizers(self):
         """
@@ -820,16 +827,166 @@ class EKG_Segmentation_Module(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         x, y = batch
-        x = x.float()
-        y = y.float()
 
         x_hat = self.forward(x)
 
-        # Logg loss 
+        # Log loss 
         loss = self.loss(x_hat, y)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        # Update Jaccard metric / intersection over Union
-        self.log('train_jaccard', self.jaccard(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y)), prog_bar=True, logger=True)
+        # Log Jaccard metric / intersection over Union
+        self.train_jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.log('train_jaccard', self.train_jaccard, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+
+        x_hat = self.forward(x)
+
+        # Log loss
+        loss = self.loss(x_hat, y)
+        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        # Log Jaccard metric / intersection over Union
+        self.val_jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.log('val_jaccard', self.val_jaccard, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        return loss
+    
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+
+        x_hat = self.forward(x)
+
+        # Log loss
+        loss = self.loss(x_hat, y)
+        self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        # Log Jaccard metric / intersection over Union
+        self.test_jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.log('test_jaccard', self.test_jaccard, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+        # Log custom metrics for different tolerance levels
+        self.multi_tolerance_metrics.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+
+        return loss
+    
+    def on_train_epoch_end(self):
+        self.train_jaccard.reset()
+        return super().on_train_epoch_end()
+    
+    def on_validation_epoch_end(self):
+        self.val_jaccard.reset()
+        return super().on_validation_epoch_end()
+
+    def on_test_epoch_end(self):
+        self.test_jaccard.compute()
+        self.log('test_jaccard', self.test_jaccard, prog_bar=True, logger=True)
+
+        results = self.multi_tolerance_metrics.compute()
+        self.log_dict(results, prog_bar=True, logger=True)
+
+        self.test_jaccard.reset()
+        self.multi_tolerance_metrics.reset()
+
+        print('Test Epoch End')
+        print('-----------------------------------')
+
+        return super().on_test_epoch_end()
+    
+    def postprocess_prediction(self, y):
+        """
+        Postprocess model predictions by applying thresholding and local maximum detection.
+        
+        This method processes predictions for ECG signal analysis by:
+        1. Applying a 0.5 threshold to channels 0, 2, and 4 (binary classification)
+        2. For channels 1, 3, and 5, identifying local maxima among high-confidence predictions
+           and setting only those local maxima to 1.0 while zeroing out other values
+        
+        Args:
+            y (torch.Tensor): Model predictions with shape [channels, length] for single sample
+                             or [batch_size, channels, length] for batched samples.
+                             Expected to have 6 channels representing different ECG features.
+        
+        Returns:
+            torch.Tensor: Postprocessed predictions with the same shape as input.
+                         Channels 0, 2, 4 contain binary values (0 or 1).
+                         Channels 1, 3, 5 contain sparse binary values (1 only at local maxima).
+        
+        Note:
+            The method modifies the input tensor in-place and also returns it.
+            Channels 1, 3, 5 are assumed to represent peak detection tasks where only
+            local maxima should be preserved.
+        """
+        # Check if y is batched (shape: [batch_size, channels, length])
+        if y.dim() == 3:
+            # Iterate over batch
+            for i in range(y.shape[0]):
+                y_ = (y[i] > 0.5).float()
+                y[i, 0] = y_[0]
+                y[i, 2] = y_[2]
+                y[i, 4] = y_[4]
+                # For channels 1, 3, 5, set the local maximums with confidence > 0.5 to 1
+                for ch_idx in [1, 3, 5]:
+                    high_conf_indices = (y[i, ch_idx] > 0.5).nonzero(as_tuple=True)[0]
+                    for idx in high_conf_indices:
+                        left = y[i, ch_idx][idx - 1] if idx > 0 else float('-inf')
+                        right = y[i, ch_idx][idx + 1] if idx < y[i, ch_idx].shape[0] - 1 else float('-inf')
+                        if y[i, ch_idx][idx] >= left and y[i, ch_idx][idx] >= right:
+                            y[i, ch_idx].zero_()
+                            y[i, ch_idx][idx] = 1.0
+        else:
+            y_ = (y > 0.5).float()
+            y[0] = y_[0]
+            y[2] = y_[2]
+            y[4] = y_[4]
+            for ch_idx in [1, 3, 5]:
+                high_conf_indices = (y[ch_idx] > 0.5).nonzero(as_tuple=True)[0]
+                for idx in high_conf_indices:
+                    left = y[ch_idx][idx - 1] if idx > 0 else float('-inf')
+                    right = y[ch_idx][idx + 1] if idx < y[ch_idx].shape[0] - 1 else float('-inf')
+                    if y[ch_idx][idx] >= left and y[ch_idx][idx] >= right:
+                        y[ch_idx].zero_()
+                        y[ch_idx][idx] = 1.0
+        return y
+    
+    def postprocess_ground_truth(self, y):
+        """
+        Postprocess ground truth annotations by setting local maxima for specific channels.
+        
+        This function processes ground truth data for channels 1, 3, and 5 by identifying
+        positions where the value equals 1, zeroing out the entire channel, and then
+        setting those specific positions back to 1.0. This creates sparse ground truth
+        annotations with peaks at the identified locations.
+        
+        Args:
+            y (torch.Tensor): Ground truth tensor. Can be either:
+                - 3D tensor with shape [batch_size, channels, length] for batched data
+                - 2D tensor with shape [channels, length] for single sample
+        
+        Returns:
+            torch.Tensor: Postprocessed ground truth tensor with the same shape as input,
+                         where channels 1, 3, and 5 contain sparse peaks at the original
+                         locations where values equaled 1.
+        
+        Note:
+            Only channels 1, 3, and 5 are processed. Other channels remain unchanged.
+            The function modifies the input tensor in-place.
+        """
+        # Ground truth: Channels 1, 3, 5, set local maxima where value equals 1
+        # Check if y is batched (shape: [batch_size, channels, length])
+        if y.dim() == 3:
+            # Iterate over batch
+            for i in range(y.shape[0]):
+                for ch_idx in [1, 3, 5]:
+                    true_indices = (y[i, ch_idx] == 1).nonzero(as_tuple=True)[0]
+                    y[i, ch_idx].zero_()
+                    y[i, ch_idx][true_indices] = 1.0
+        else:
+            # Single sample
+            for ch_idx in [1, 3, 5]:
+                true_indices = (y[ch_idx] == 1).nonzero(as_tuple=True)[0]
+                y[ch_idx].zero_()
+                y[ch_idx][true_indices] = 1.0
+        return y
