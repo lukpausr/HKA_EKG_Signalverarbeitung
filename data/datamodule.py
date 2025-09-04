@@ -13,10 +13,13 @@ from data.dataset import ECG_DataSet
 # This data module automatically handles the training, test and validation data and we don't have to worry
 class ECG_DataModule(pl.LightningDataModule):
     
-    def __init__(self, data_dir, batch_size=1, feature_list=None):
+    def __init__(self, data_dir, batch_size=32, num_workers=1, transform=None, persistent_workers=True, feature_list=None):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.transform = transform      # Not used right now, but prepared for future data augmentation if required
+        self.persistent_workers = persistent_workers
         self.feature_list = feature_list
 
     def prepare_data(self):
@@ -27,6 +30,10 @@ class ECG_DataModule(pl.LightningDataModule):
 
     # Load the datasets
     def setup(self, stage=None):
+
+        # Raise an error if transform != None because it hasn't been implemented yet
+        if self.transform is not None:
+            raise NotImplementedError("Transform is not implemented yet and does not have any influence on the data")
 
         # the datasets instances are generated here, depending on the current stage (val/train/test split)
 
@@ -46,8 +53,8 @@ class ECG_DataModule(pl.LightningDataModule):
         return DataLoader(
             dataset=self.train_dataset,
             batch_size=self.batch_size,
-            num_workers=os.cpu_count(),
-            persistent_workers=True,
+            num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
             shuffle=True,
         )
 
@@ -56,8 +63,8 @@ class ECG_DataModule(pl.LightningDataModule):
         return DataLoader(
             dataset=self.val_dataset,
             batch_size=self.batch_size,
-            num_workers=os.cpu_count(),
-            persistent_workers=True,
+            num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
             shuffle=False,
         )
 
@@ -66,7 +73,7 @@ class ECG_DataModule(pl.LightningDataModule):
         return DataLoader(
             dataset=self.test_dataset,
             batch_size=self.batch_size,
-            num_workers=os.cpu_count(),
-            persistent_workers=True,
+            num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
             shuffle=False,
         )
