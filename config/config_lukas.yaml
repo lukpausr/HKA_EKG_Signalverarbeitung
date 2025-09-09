@@ -1,10 +1,10 @@
 # Path configuration
 path_to_data: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung_Data\data
 path_to_models: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung_Data\models
-path_to_matlab_data: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung_Data\data\matlab_data\records500
+path_to_matlab_data: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung_Data\ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3\preprocessing_output
 
 # Data preprocessing configuration
-source_feature_list: ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
+source_feature_list: ['P-wave', 'P-peak', 'QRS-complex', 'R-peak', 'T-wave', 'T-peak']
 number_of_augmentations: 6      # augmentations per sample
 normalization_method: 'min-max' # Options: 'min-max', 'z-score'
 
@@ -15,7 +15,7 @@ seed: 42
 num_workers: 14
 persistent_workers: True
 sampling_rate: 512
-feature_list: ['P-wave', 'P-peak', 'QRS-comples', 'R-peak', 'T-wave', 'T-peak']
+feature_list: ['P-wave', 'P-peak', 'QRS-complex', 'R-peak', 'T-wave', 'T-peak']
 
 # Model configuration (for training without using Hyperparameter Tuning)
 batch_size: 32

@@ -12,7 +12,7 @@ from scipy.ndimage import gaussian_filter1d
 # Custom Dataset for Pytorch
 # Source: https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 class ECG_DataSet(torch.utils.data.Dataset):
-    def __init__(self, data_dir: str, label_cols: str = None, data_cols: str = ['raw_data']):
+    def __init__(self, data_dir: str, label_cols: str = None, data_cols: str = ['I']):
         self.data_dir = data_dir
         self.label_cols = label_cols
         self.data_cols = data_cols
@@ -50,34 +50,51 @@ class ECG_DataSet(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.file_list)
     
-    # Return a single data entry using a given index
+    # # Return a single data entry using a given index
+    # def __getitem__(self, idx):
+    #     sample = pd.read_csv(self.data_dir + self.file_list[idx])
+    #     # Augment data by selecting 512 Datapoints randomly between given bounds
+    #     start_idx = np.random.randint(256, len(sample) - (512+256))
+    #     sample = sample.iloc[start_idx:start_idx + 512]
+    #     # Apply gaussian filter to improve learning capabilities
+    #     peak_features = [f for f in self.label_cols if f in ['P-peak', 'R-peak', 'T-peak']]
+    #     if peak_features:
+    #         arr = sample[peak_features].astype(np.float64).values
+    #         arr = gaussian_filter1d(arr, sigma=10, axis=0, mode='constant')
+    #         max_vals = np.max(arr, axis=0)
+    #         # Avoid division by zero
+    #         max_vals[max_vals == 0] = 1
+    #         arr = arr / max_vals
+    #         sample[peak_features] = arr
+    #     return torch.tensor(sample[self.data_cols].values, dtype=torch.float32).T, torch.tensor(sample[self.label_cols].values, dtype=torch.float32).T
+
     def __getitem__(self, idx):
-        
         sample = pd.read_csv(self.data_dir + self.file_list[idx])
-
-        # for feature in self.label_cols:
-        #     if(feature == 'P-peak' or feature == 'R-peak' or feature == 'T-peak'):
-        #         # add gaussian distribution over peaks with width of 10 // use constant to extend data by 0s when filtering with guassian
-        #         sample[feature] = gaussian_filter1d(np.float64(sample[feature]), sigma=10, mode='constant')
-        #         max_val = max(sample[feature])  # normalize between 0 and 1
-        #         if(max_val > 0):
-        #             sample[feature] = sample[feature] * (1/max_val)
-
+        
+        # Augment data by selecting 512 Datapoints randomly between given bounds
+        start_idx = np.random.randint(256, len(sample) - (512+256))
+        sample = sample.iloc[start_idx:start_idx + 512].copy()  # Add .copy() to avoid view issues
+        
+        # Apply gaussian filter to improve learning capabilities
         peak_features = [f for f in self.label_cols if f in ['P-peak', 'R-peak', 'T-peak']]
         if peak_features:
-            arr = sample[peak_features].astype(np.float64).values
-            arr = gaussian_filter1d(arr, sigma=10, axis=0, mode='constant')
-            max_vals = np.max(arr, axis=0)
-            # Avoid division by zero
-            max_vals[max_vals == 0] = 1
-            arr = arr / max_vals
-            sample[peak_features] = arr
-
-        return torch.tensor(sample[self.data_cols].values, dtype=torch.float32).T, torch.tensor(sample[self.label_cols].values, dtype=torch.float32).T
-
-        # data_idx = self.data[idx]
-        # return torch.tensor(data_idx[self.data_cols].values).T, torch.tensor(data_idx[self.label_cols].values).T
-    
-        # raw_data = torch.tensor(data_idx[self.data_cols].values).T
-        # labels = torch.tensor(data_idx[self.label_cols].values).T
-        # return raw_data, labels
+            # Work with numpy arrays directly
+            peak_data = sample[peak_features].astype(np.float64).values.copy()  # Explicit copy
+            peak_data = gaussian_filter1d(peak_data, sigma=10, axis=0, mode='constant')
+            
+            max_vals = np.max(peak_data, axis=0)
+            max_vals[max_vals == 0] = 1  # Avoid division by zero
+            peak_data = peak_data / max_vals
+            
+            # Update the DataFrame
+            sample[peak_features] = peak_data
+        
+        # Convert to numpy arrays first, then to tensors with explicit copying
+        data_array = sample[self.data_cols].values.astype(np.float32).copy()
+        label_array = sample[self.label_cols].values.astype(np.float32).copy()
+        
+        # Create tensors from numpy arrays (this ensures proper memory layout)
+        data_tensor = torch.from_numpy(data_array).T.contiguous()
+        label_tensor = torch.from_numpy(label_array).T.contiguous()
+        
+        return data_tensor, label_tensor
