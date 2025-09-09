@@ -1,4 +1,5 @@
 function [signal,FPT_MultiChannel] = ReadFileAndAnnotate(fileName)
+
 %read wfdb ecg file, filter in multiple steps and annotate automatically
 %file needs to be found in current directory!
 % read wfdb ecg file, 12 leads in signal, frequency in Fs
@@ -25,4 +26,5 @@ signal=Notch_Filter(signal,Fs,50,1);
 % produce FPT Table
 % usage: [FPT_MultiChannel,FPT_Cell]=Process_ECG_Multi(signal,samplerate,varargin)
 [FPT_MultiChannel,~]=Annotate_ECG_Multi(signal,Fs);
+
 end

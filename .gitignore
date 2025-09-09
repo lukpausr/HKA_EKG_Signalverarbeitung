@@ -167,3 +167,4 @@ HKA-EKG-Signalverarbeitung/
 
 .vscode/settings.json
 lightning_logs/*
+preprocessing_matlab/WFDB_Toolbox/*
