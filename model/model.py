@@ -8,7 +8,9 @@ from torchmetrics import Metric
 from torchmetrics.classification import BinaryJaccardIndex
 from matplotlib import pyplot as plt
 
+import os
 import numpy as np
+import pandas as pd
 
 # from parameters import Param 
 
@@ -42,6 +44,8 @@ class MultiToleranceWrapper(nn.Module):
             f"tolerance_{tol_m}ms": CustomMetrics(tol_ms=tol_m, sampling_rate=sampling_rate) for tol_m in tol_ms
         })
 
+        self.path_to_history_data = None
+
     def update(self, y_true, y_pred):
         """
         Updates all contained metrics with new predictions and ground truth values.
@@ -58,9 +62,12 @@ class MultiToleranceWrapper(nn.Module):
         Returns:
             dict: A dictionary containing computed metrics for each tolerance.
         """
+        if self.path_to_history_data is not None:
+            os.makedirs(self.path_to_history_data, exist_ok=True)
+
         results = {}
         for name, metric in self.metrics.items():
-            computed_metric = metric.compute()
+            computed_metric = metric.compute(data_path = self.path_to_history_data)
             results.update({f"{name}_{k}": v.float() if isinstance(v, torch.Tensor) else v for k, v in computed_metric.items()})
         return results
 
@@ -165,7 +172,7 @@ class CustomMetrics(Metric):
         self.fp_offset += fp_offset.detach().clone().cuda()
         self.fn_offset += fn_offset.detach().clone().cuda()
 
-    def compute(self):
+    def compute(self, data_path = None):
 
         tp_onset = torch.tensor([0 for _ in range(6)])
         fp_onset = torch.tensor([0 for _ in range(6)])
@@ -205,7 +212,24 @@ class CustomMetrics(Metric):
         f1_onset_global = 2 * (ppv_onset_global * sensitivity_onset_global) / (ppv_onset_global + sensitivity_onset_global) if (ppv_onset_global + sensitivity_onset_global) > 0 else 0
         f1_offset_global = 2 * (ppv_offset_global * sensitivity_offset_global) / (ppv_offset_global + sensitivity_offset_global) if (ppv_offset_global + sensitivity_offset_global) > 0 else 0
 
-        self.plot_onset_offset_histograms()
+        # Save the computed metrics as csv
+        if data_path is not None:
+            pd.DataFrame({
+                "tp_onset_global": [tp_onset_global],
+                "fp_onset_global": [fp_onset_global],
+                "fn_onset_global": [fn_onset_global],
+                "tp_offset_global": [tp_offset_global],
+                "fp_offset_global": [fp_offset_global],
+                "fn_offset_global": [fn_offset_global],
+                "sensitivity_onset_global": [sensitivity_onset_global],
+                "sensitivity_offset_global": [sensitivity_offset_global],
+                "ppv_onset_global": [ppv_onset_global],
+                "ppv_offset_global": [ppv_offset_global],
+                "f1_onset_global": [f1_onset_global],
+                "f1_offset_global": [f1_offset_global],
+            }).to_csv(os.path.join(data_path, f"computed_metrics_tol_{self.tol_ms}ms.csv"), index=False)
+
+        self.plot_onset_offset_histograms(data_path=data_path)
 
         return {
             "tp_onset_global" : tp_onset_global,
@@ -285,7 +309,7 @@ class CustomMetrics(Metric):
         return matched_onsets, matched_offsets 
 
     # Plot onset and offset value histograms
-    def plot_onset_offset_histograms(self, value_range_ms=(-250, 250), fs=512, feature_names=None):
+    def plot_onset_offset_histograms(self, value_range_ms=(-250, 250), fs=512, feature_names=None, data_path=None):
 
         plt.figure(figsize=(18, 10))
         for category in range(6):
@@ -361,9 +385,43 @@ class CustomMetrics(Metric):
             plt.xlabel('Diff [ms]')
             plt.ylabel('Count')
 
+            # Save raw difference data and metrics data as separate files
+            if data_path is not None:
+
+                # Save onset differences
+                onset_data = pd.DataFrame({
+                    "onset_differences_ms": onset_filtered
+                })
+                onset_data.to_csv(os.path.join(data_path, f"onset_differences_cat_{category}_tol_{self.tol_ms}ms.csv"), index=False)
+                
+                # Save offset differences
+                offset_data = pd.DataFrame({
+                    "offset_differences_ms": offset_filtered
+                })
+                offset_data.to_csv(os.path.join(data_path, f"offset_differences_cat_{category}_tol_{self.tol_ms}ms.csv"), index=False)
+                
+                # Save computed metrics data
+                metrics_data = pd.DataFrame({
+                    "category": [category],
+                    "var_onset": [var_onset],
+                    "std_onset": [std_onset],
+                    "var_offset": [var_offset],
+                    "std_offset": [std_offset],
+                    "tolerance_ms": [self.tol_ms],
+                    "n_onset_samples": [len(onset_filtered)],
+                    "n_offset_samples": [len(offset_filtered)]
+                })
+                metrics_data.to_csv(os.path.join(data_path, f"metrics_cat_{category}_tol_{self.tol_ms}ms.csv"), index=False)
+
         plt.suptitle(f'Onset/Offset Differences - Sampling Rate: {self.sampling_rate} Hz, Tolerance: {self.tol_ms} ms', fontsize=14)
         plt.tight_layout()
+
+        # Save the plot at the given path
+        if data_path is not None:
+            plt.savefig(os.path.join(data_path, f"computed_metrics_histogram_tol_{self.tol_ms}ms.png"))
+        
         plt.show()
+        plt.close()
 
         # Preparation for CDF Plot (not working yet)
         # for category in range(6):
@@ -417,8 +475,11 @@ class CustomMetrics(Metric):
 # Wrapper for UNET Models (crucial for trying diferent architectures without a hassle)
 class EKG_Segmentation_Module(pl.LightningModule):
 
-    def __init__(self, learning_rate=1e-3, optimizer_name='Adam', weight_decay=0.0, scheduler_name='StepLR'):
+    def __init__(self, learning_rate=1e-3, optimizer_name='Adam', weight_decay=0.0, scheduler_name='StepLR', model_name=None):
         super().__init__()
+
+        # Meta information
+        self.model_name = "parent_class" # model_name if model_name is not None else self.__class__.__name__
 
         # Hyperparameters
         self.learning_rate = learning_rate
@@ -530,8 +591,9 @@ class EKG_Segmentation_Module(pl.LightningModule):
         return super().on_validation_epoch_end()
 
     def on_test_epoch_end(self):
-        self.test_jaccard.compute()
-        self.log('test_jaccard', self.test_jaccard, prog_bar=True, logger=True)
+
+        jaccard_index = self.test_jaccard.compute()
+        self.log('test_jaccard', jaccard_index, prog_bar=True, logger=True)
 
         results = self.multi_tolerance_metrics.compute()
         self.log_dict(results, prog_bar=True, logger=True)
@@ -699,11 +761,14 @@ class UNET_1D(EKG_Segmentation_Module):
             learning_rate=1e-3,
             optimizer_name='Adam',
             weight_decay=0.0,
-            scheduler_name='StepLR'
+            scheduler_name='StepLR',
+            model_name=None
             ):
 
         # Call parent constructor with optimizer parameters
-        super().__init__(learning_rate, optimizer_name, weight_decay, scheduler_name)
+        super().__init__(learning_rate, optimizer_name, weight_decay, scheduler_name, model_name)
+
+        self.model_name = model_name if model_name is not None else self.__class__.__name__
 
         # Save hyperparameters
         self.save_hyperparameters()

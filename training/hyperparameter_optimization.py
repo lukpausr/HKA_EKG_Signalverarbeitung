@@ -68,15 +68,21 @@ class OptunaTrainer:
 
         transform = self._build_transform() # not utilized, but acts as a dummy for data augmentation if required
 
+        # Setup wandb_logger for experiment tracking
+        wandb_logger = self._setup_wandb_logger()
+
+        # Setup data module
         dm = self.datamodule(
             data_dir=self.config['path_to_data'],
             batch_size=self.config['batch_size'],
             num_workers=self.config['num_workers'],
             transform=transform,
             persistent_workers=self.config['persistent_workers'],
-            feature_list=self.config['feature_list']
+            feature_list=self.config['feature_list'],
+            data_cols=['I']
         )
 
+        # Initialize model
         self.model = self.model(
             in_channels=1,
             layer_n=512,
@@ -85,11 +91,9 @@ class OptunaTrainer:
             learning_rate=self.config['learning_rate'],
             optimizer_name=self.config['optimizer'],
             weight_decay=self.config['weight_decay'],
-            scheduler_name=self.config['scheduler']
+            scheduler_name=self.config['scheduler'],
+            model_name=None # self.config['model_name']
         )
-
-        # Setup wandb_logger for experiment tracking
-        wandb_logger = self._setup_wandb_logger()
 
         # Setup trainer
         trainer = Trainer(
@@ -120,3 +124,25 @@ class OptunaTrainer:
 
         print(f"Optimization finished with best validation loss: {val_loss.item() if val_loss else float('inf')}")
         return val_loss.item() if val_loss else float('inf')
+    
+    def run_test(self):
+
+        transform = self._build_transform() # not utilized, but acts as a dummy for data augmentation if required
+
+        # Setup data module
+        dm = self.datamodule(
+            data_dir=self.config['path_to_data'],
+            batch_size=self.config['batch_size'],
+            num_workers=self.config['num_workers'],
+            transform=transform,
+            persistent_workers=self.config['persistent_workers'],
+            feature_list=self.config['feature_list'],
+            data_cols=['I']
+        )
+
+        trainer = Trainer()
+        # dm.setup(stage="test")
+        print(self.model.model_name)
+        self.model.multi_tolerance_metrics.path_to_history_data = os.path.join(self.config['path_to_models'], self.config['experiment_name'])
+        trainer.test(model=self.model, datamodule=dm)
+
