@@ -801,10 +801,18 @@ class UNET_1D(EKG_Segmentation_Module):
         # Apply 2 1d-convolutional layers
         # Input data size: 1 x 512
         # Output data size: 64 x 512
-        self.layer1 = nn.Sequential(
-            conbr_block(self.in_channels, self.in_channels * 64 * factor, self.kernel_size, stride=1),
-            conbr_block(self.in_channels * 64 * factor, self.in_channels * 64 * factor, self.kernel_size, stride=1),
+        if(self.in_channels != 1):
+            self.layer1 = nn.Sequential(
+                conbr_block(self.in_channels, 64 * factor, self.kernel_size, stride=1),
+                conbr_block(64 * factor, 64 * factor, self.kernel_size, stride=1),
+            )
+        else:
+            self.layer1 = nn.Sequential(
+                conbr_block(self.in_channels, self.in_channels * 64 * factor, self.kernel_size, stride=1),
+                conbr_block(self.in_channels * 64 * factor, self.in_channels * 64 * factor, self.kernel_size, stride=1),
         )
+
+        self.in_channels = 1  # Reset in_channels to 1 after first layer if it was different
 
         # Apply 2 1d-convolutional layers
         # Input data size: 64 x 256

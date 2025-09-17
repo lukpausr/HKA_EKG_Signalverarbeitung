@@ -1,4 +1,5 @@
 import os
+from pyexpat import model
 import sys
 import datetime
 
@@ -24,6 +25,9 @@ class OptunaTrainer:
     def _setup_wandb_logger(self):
 
         now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+        print(self.config['data_cols'])
+        lead_str = '-'.join(self.config['data_cols'])
+        print(lead_str)
         exp_name = (
             f"{self.config['model_name']}"
             f"_bs{self.config['batch_size']}"
@@ -32,6 +36,7 @@ class OptunaTrainer:
             f"_opt{self.config['optimizer']}"
             f"_sch{self.config['scheduler'] if self.config['scheduler'] else 'None'}"
             f"_acc{self.config['accumulate_grad_batches']}"
+            f"_leads{lead_str}"
             f"_{now_str}"
         )
         self.config['experiment_name'] = exp_name
@@ -51,9 +56,20 @@ class OptunaTrainer:
                 'weight_decay': self.config['weight_decay'],
                 'scheduler': self.config['scheduler'],
                 'model_name': self.config['model_name'],
-                'dataset_name': self.config['dataset_name']
+                'dataset_name': self.config['dataset_name'],
+                'leads': self.config['data_cols']
             }
         )
+    
+    def suggest_ecg_leads(self, trial, available_leads):
+
+        mask = []
+        for lead in available_leads:
+            mask.append(trial.suggest_categorical(f"{lead}", [0, 1]))
+        selected_leads = [lead for lead, m in zip(available_leads, mask) if m == 1]
+        if sum(mask) == 0:
+            selected_leads = [available_leads[0]]  # Ensure at least one lead is selected
+        return selected_leads
 
     def run_training(self, trial):
 
@@ -65,6 +81,9 @@ class OptunaTrainer:
         self.config['learning_rate'] = trial.suggest_float('learning_rate', self.config['hpo_min_learning_rate'], self.config['hpo_max_learning_rate'], log=True)
         self.config['weight_decay'] = trial.suggest_float('weight_decay', self.config['hpo_min_weight_decay'], self.config['hpo_max_weight_decay'], log=True)
         self.config['scheduler'] = trial.suggest_categorical('scheduler', self.config['hpo_scheduler'])
+        
+        self.config['data_cols'] = self.suggest_ecg_leads(trial, self.config['available_leads'])
+        print(f"Selected leads for this trial: {self.config['data_cols']}")
 
         transform = self._build_transform() # not utilized, but acts as a dummy for data augmentation if required
 
@@ -79,12 +98,12 @@ class OptunaTrainer:
             transform=transform,
             persistent_workers=self.config['persistent_workers'],
             feature_list=self.config['feature_list'],
-            data_cols=['I']
+            data_cols=self.config['data_cols']
         )
 
         # Initialize model
         self.model = self.model(
-            in_channels=1,
+            in_channels=len(self.config['data_cols']),
             layer_n=512,
             out_channels=len(self.config['feature_list']),
             kernel_size=5,
@@ -92,7 +111,7 @@ class OptunaTrainer:
             optimizer_name=self.config['optimizer'],
             weight_decay=self.config['weight_decay'],
             scheduler_name=self.config['scheduler'],
-            model_name=None # self.config['model_name']
+            model_name=self.config['experiment_name']
         )
 
         # Setup trainer
@@ -122,6 +141,12 @@ class OptunaTrainer:
         val_loss = trainer.callback_metrics.get("val_loss") 
         wandb.finish()
 
+        # Save the model's state_dict to the path specified in config
+        # self.model.model_name = self.config['experiment_name']
+        save_path = os.path.join(self.config['path_to_models'], self.config['experiment_name'], "model_best_ckpt.ckpt")
+        trainer.save_checkpoint(save_path)
+        print(f"Model checkpoint saved as {save_path}")
+
         print(f"Optimization finished with best validation loss: {val_loss.item() if val_loss else float('inf')}")
         return val_loss.item() if val_loss else float('inf')
     
@@ -137,7 +162,7 @@ class OptunaTrainer:
             transform=transform,
             persistent_workers=self.config['persistent_workers'],
             feature_list=self.config['feature_list'],
-            data_cols=['I']
+            data_cols=self.config['data_cols']
         )
 
         trainer = Trainer()
