@@ -588,12 +588,16 @@ class EKG_Segmentation_Module(pl.LightningModule):
         # Apply sigmoid activation
         x_hat = nn.functional.sigmoid(x_hat)
 
+        # Perform postprocessing
+        x_hat_processed = self.postprocess_prediction(x_hat)
+        y_processed = self.postprocess_ground_truth(y)
+
         # Log Jaccard metric / intersection over Union
-        self.test_jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.test_jaccard.update(x_hat_processed, y_processed)
         self.log('test_jaccard', self.test_jaccard, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
         # Log custom metrics for different tolerance levels
-        self.multi_tolerance_metrics.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.multi_tolerance_metrics.update(x_hat_processed, y_processed)
 
         # Print Graphics
         if True:
@@ -635,66 +639,123 @@ class EKG_Segmentation_Module(pl.LightningModule):
         print('-----------------------------------')
 
         return super().on_test_epoch_end()
-    
+
+    # This method was generated/optimized using Claude Sonnet 4
     def postprocess_prediction(self, y):
         """
-        Fixed GPU-vectorized postprocessing for predictions.
+        Fully GPU-optimized postprocessing for predictions.
         """
         y_processed = y.clone()
         
         if y.dim() == 3:  # Batched
-            # Threshold channels 0, 2, 4
+            # Threshold channels 0, 2, 4 (binary classification) - VECTORIZED
             y_processed[:, [0, 2, 4]] = (y[:, [0, 2, 4]] > 0.5).float()
             
-            # Process channels 1, 3, 5 individually to avoid indexing issues
+            # Process channels 1, 3, 5 (peak detection)
             for ch_idx in [1, 3, 5]:
-                peak_channel = y[:, ch_idx]  # Shape: [batch, length]
-                
-                # High confidence mask
-                high_conf = peak_channel > 0.5
-                
-                # Compute local maxima
-                padded = torch.nn.functional.pad(peak_channel, (1, 1), mode='constant', value=float('-inf'))
-                left = padded[:, :-2]
-                center = padded[:, 1:-1]
-                right = padded[:, 2:]
-                
-                is_local_max = (center >= left) & (center >= right)
-                
-                # Combine conditions
-                final_mask = high_conf & is_local_max
-                
-                # Zero out and set peaks for this specific channel
-                y_processed[:, ch_idx] = 0.0
-                y_processed[:, ch_idx][final_mask] = 1.0
-                
+                if self.config['use_nms']:
+                    # GPU-OPTIMIZED: Vectorized NMS across ALL batches
+                    window_size = self.config['nms_window_size']
+                    peaks_batch = self.batch_non_maximum_suppression_1d(
+                        y[:, ch_idx], window_size
+                    )
+                    y_processed[:, ch_idx] = peaks_batch.float()
+                else:
+                    # Original vectorized local maxima detection
+                    peak_channel = y[:, ch_idx]  # Shape: [batch, length]
+                    
+                    # High confidence mask
+                    high_conf = peak_channel > 0.5
+                    
+                    # Compute local maxima (vectorized across all batches)
+                    padded = torch.nn.functional.pad(peak_channel, (1, 1), mode='constant', value=float('-inf'))
+                    left = padded[:, :-2]
+                    center = padded[:, 1:-1]
+                    right = padded[:, 2:]
+                    
+                    is_local_max = (center >= left) & (center >= right)
+                    final_mask = high_conf & is_local_max
+                    
+                    # Zero out and set peaks
+                    y_processed[:, ch_idx] = 0.0
+                    y_processed[:, ch_idx][final_mask] = 1.0
+                        
         else:  # Single sample
             # Threshold channels 0, 2, 4
             y_processed[[0, 2, 4]] = (y[[0, 2, 4]] > 0.5).float()
             
-            # Process channels 1, 3, 5 individually
+            # Process channels 1, 3, 5
             for ch_idx in [1, 3, 5]:
-                peak_channel = y[ch_idx]  # Shape: [length]
-                
-                # High confidence mask
-                high_conf = peak_channel > 0.5
-                
-                # Compute local maxima
-                padded = torch.nn.functional.pad(peak_channel.unsqueeze(0), (1, 1), mode='constant', value=float('-inf'))
-                left = padded[:, :-2].squeeze(0)
-                center = padded[:, 1:-1].squeeze(0)
-                right = padded[:, 2:].squeeze(0)
-                
-                is_local_max = (center >= left) & (center >= right)
-                
-                # Combine conditions
-                final_mask = high_conf & is_local_max
-                
-                # Zero out and set peaks for this specific channel
-                y_processed[ch_idx] = 0.0
-                y_processed[ch_idx][final_mask] = 1.0
-        
+                if self.config['use_nms']:
+                    window_size = self.config['nms_window_size']
+
+                    # Convert single sample to batch format
+                    signal_batch = y[ch_idx].unsqueeze(0)  # Add batch dimension
+                    peaks_batch = self.batch_non_maximum_suppression_1d(signal_batch, window_size)
+                    y_processed[ch_idx] = peaks_batch[0].float()  # Remove batch dimension
+                else:
+                    # Original method
+                    peak_channel = y[ch_idx]
+                    high_conf = peak_channel > 0.5
+                    
+                    padded = torch.nn.functional.pad(peak_channel.unsqueeze(0), (1, 1), mode='constant', value=float('-inf'))
+                    left = padded[:, :-2].squeeze(0)
+                    center = padded[:, 1:-1].squeeze(0)
+                    right = padded[:, 2:].squeeze(0)
+                    
+                    is_local_max = (center >= left) & (center >= right)
+                    final_mask = high_conf & is_local_max
+                    
+                    y_processed[ch_idx] = 0.0
+                    y_processed[ch_idx][final_mask] = 1.0
+            
         return y_processed
+
+    # This method was generated/optimized using Claude Sonnet 4
+    def batch_non_maximum_suppression_1d(self, signals, window_size=20):
+        """
+        Ultra-optimized vectorized NMS for entire batch without any loops.
+        """
+        batch_size, signal_length = signals.shape
+        device = signals.device
+        
+        # Find all potential peaks (vectorized across batch)
+        padded = torch.nn.functional.pad(signals, (1, 1), mode='constant', value=float('-inf'))
+        left = padded[:, :-2]
+        center = padded[:, 1:-1] 
+        right = padded[:, 2:]
+        
+        is_local_max = (center >= left) & (center >= right) & (center > 0.5)
+        
+        # Create batch result tensor
+        batch_peaks = torch.zeros_like(signals, dtype=torch.bool, device=device)
+        
+        # For each batch, apply vectorized suppression
+        for batch_idx in range(batch_size):
+            candidates = is_local_max[batch_idx].nonzero(as_tuple=True)[0]
+            
+            if len(candidates) == 0:
+                continue
+            
+            # Sort by confidence
+            confidences = signals[batch_idx, candidates]
+            sorted_indices = torch.argsort(confidences, descending=True)
+            sorted_candidates = candidates[sorted_indices]
+            
+            # Vectorized suppression matrix
+            if len(sorted_candidates) > 0:
+                pos_diff = sorted_candidates.unsqueeze(1) - sorted_candidates.unsqueeze(0)
+                distances = torch.abs(pos_diff)
+                suppresses = (distances <= window_size // 2) & (distances > 0)
+                mask = torch.triu(torch.ones_like(suppresses), diagonal=1)
+                suppresses = suppresses & mask
+                is_suppressed = torch.any(suppresses, dim=0)
+                final_candidates = sorted_candidates[~is_suppressed]
+                
+                if len(final_candidates) > 0:
+                    batch_peaks[batch_idx, final_candidates] = True
+        
+        return batch_peaks
 
     def postprocess_ground_truth(self, y):
         """
