@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 import os
 import numpy as np
 import pandas as pd
+import math
 
 # from parameters import Param 
 
@@ -342,6 +343,9 @@ class CustomMetrics(Metric):
             onset_bins = int(np.ceil(np.sqrt(len(onset_filtered)))) if len(onset_filtered) > 0 else 1
             offset_bins = int(np.ceil(np.sqrt(len(offset_filtered)))) if len(offset_filtered) > 0 else 1
 
+            if(category == 1):
+                print(onset_filtered, offset_filtered)
+
             # Onset plot
             plt.subplot(2, 6, category + 1)
             plt.hist(onset_filtered, bins=onset_bins, color='skyblue', edgecolor='black', range=value_range_ms)
@@ -480,6 +484,7 @@ class EKG_Segmentation_Module(pl.LightningModule):
 
         # Meta information
         self.model_name = "parent_class" # model_name if model_name is not None else self.__class__.__name__
+        self.config = None
 
         # Hyperparameters
         self.learning_rate = learning_rate
@@ -537,6 +542,16 @@ class EKG_Segmentation_Module(pl.LightningModule):
         # Apply sigmoid activation
         x_hat = nn.functional.sigmoid(x_hat)
 
+        # Plot some example predictions
+        if batch_idx == 0 and self.current_epoch % 10 == 0:
+            x_np = x[0].detach().cpu()
+            y_np = y[0].detach().cpu()
+            x_hat_np = x_hat[0].detach().cpu()
+            self.generatePlot(x_np, y_np, x_np, x_hat_np, config=self.config, path=None)
+            x_hat_np = self.postprocess_prediction(x_hat_np)
+            y_np = self.postprocess_ground_truth(y_np)
+            self.generatePlot(x_np, y_np, x_np, x_hat_np, config=self.config, path=None)
+
         # Log Jaccard metric / intersection over Union
         # self.train_jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
         # self.log('train_jaccard', self.train_jaccard, on_step=False, on_epoch=True, prog_bar=True, logger=True)
@@ -555,10 +570,10 @@ class EKG_Segmentation_Module(pl.LightningModule):
         # Apply sigmoid activation
         x_hat = nn.functional.sigmoid(x_hat)
 
-
         # Log Jaccard metric / intersection over Union
-        # self.val_jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
-        # self.log('val_jaccard', self.val_jaccard, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.val_jaccard.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
+        self.log('val_jaccard', self.val_jaccard, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
         return loss
     
     def test_step(self, batch, batch_idx):
@@ -580,6 +595,16 @@ class EKG_Segmentation_Module(pl.LightningModule):
         # Log custom metrics for different tolerance levels
         self.multi_tolerance_metrics.update(self.postprocess_prediction(x_hat), self.postprocess_ground_truth(y))
 
+        # Print Graphics
+        if True:
+            x_np = x[0].detach().cpu()
+            y_np = y[0].detach().cpu()
+            x_hat_np = x_hat[0].detach().cpu()
+            self.generatePlot(x_np, y_np, x_np, x_hat_np, config=self.config, path=os.path.join(self.multi_tolerance_metrics.path_to_history_data, f"raw_{batch_idx}.png") if self.multi_tolerance_metrics.path_to_history_data else None)
+            x_hat_np = self.postprocess_prediction(x_hat_np)
+            y_np = self.postprocess_ground_truth(y_np)
+            self.generatePlot(x_np, y_np, x_np, x_hat_np, config=self.config, path=os.path.join(self.multi_tolerance_metrics.path_to_history_data, f"postprocessed_{batch_idx}.png") if self.multi_tolerance_metrics.path_to_history_data else None)
+
         return loss
     
     def on_train_epoch_end(self):
@@ -587,7 +612,12 @@ class EKG_Segmentation_Module(pl.LightningModule):
         return super().on_train_epoch_end()
     
     def on_validation_epoch_end(self):
-        # self.val_jaccard.reset()
+        
+        jaccard_index = self.val_jaccard.compute()
+        self.log('val_jaccard', jaccard_index, prog_bar=True, logger=True)
+
+        self.val_jaccard.reset()
+
         return super().on_validation_epoch_end()
 
     def on_test_epoch_end(self):
@@ -606,101 +636,249 @@ class EKG_Segmentation_Module(pl.LightningModule):
 
         return super().on_test_epoch_end()
     
+    # def postprocess_prediction(self, y):
+    #     """
+    #     Postprocess model predictions by applying thresholding and local maximum detection.
+        
+    #     This method processes predictions for ECG signal analysis by:
+    #     1. Applying a 0.5 threshold to channels 0, 2, and 4 (binary classification)
+    #     2. For channels 1, 3, and 5, identifying local maxima among high-confidence predictions
+    #        and setting only those local maxima to 1.0 while zeroing out other values
+        
+    #     Args:
+    #         y (torch.Tensor): Model predictions with shape [channels, length] for single sample
+    #                          or [batch_size, channels, length] for batched samples.
+    #                          Expected to have 6 channels representing different ECG features.
+        
+    #     Returns:
+    #         torch.Tensor: Postprocessed predictions with the same shape as input.
+    #                      Channels 0, 2, 4 contain binary values (0 or 1).
+    #                      Channels 1, 3, 5 contain sparse binary values (1 only at local maxima).
+        
+    #     Note:
+    #         The method modifies the input tensor in-place and also returns it.
+    #         Channels 1, 3, 5 are assumed to represent peak detection tasks where only
+    #         local maxima should be preserved.
+    #     """
+    #     # Check if y is batched (shape: [batch_size, channels, length])
+    #     if y.dim() == 3:
+    #         # Iterate over batch
+    #         for i in range(y.shape[0]):
+    #             y_ = (y[i] > 0.5).float()
+    #             y[i, 0] = y_[0]
+    #             y[i, 2] = y_[2]
+    #             y[i, 4] = y_[4]
+    #             # For channels 1, 3, 5, set the local maximums with confidence > 0.5 to 1
+    #             for ch_idx in [1, 3, 5]:
+    #                 high_conf_indices = (y[i, ch_idx] > 0.5).nonzero(as_tuple=True)[0]
+    #                 for idx in high_conf_indices:
+    #                     left = y[i, ch_idx][idx - 1] if idx > 0 else float('-inf')
+    #                     right = y[i, ch_idx][idx + 1] if idx < y[i, ch_idx].shape[0] - 1 else float('-inf')
+    #                     if y[i, ch_idx][idx] >= left and y[i, ch_idx][idx] >= right:
+    #                         y[i, ch_idx].zero_()
+    #                         y[i, ch_idx][idx] = 1.0
+    #     else:
+    #         y_ = (y > 0.5).float()
+    #         y[0] = y_[0]
+    #         y[2] = y_[2]
+    #         y[4] = y_[4]
+    #         for ch_idx in [1, 3, 5]:
+    #             high_conf_indices = (y[ch_idx] > 0.5).nonzero(as_tuple=True)[0]
+    #             for idx in high_conf_indices:
+    #                 left = y[ch_idx][idx - 1] if idx > 0 else float('-inf')
+    #                 right = y[ch_idx][idx + 1] if idx < y[ch_idx].shape[0] - 1 else float('-inf')
+    #                 if y[ch_idx][idx] >= left and y[ch_idx][idx] >= right:
+    #                     y[ch_idx].zero_()
+    #                     y[ch_idx][idx] = 1.0
+    #     return y
+
     def postprocess_prediction(self, y):
         """
-        Postprocess model predictions by applying thresholding and local maximum detection.
-        
-        This method processes predictions for ECG signal analysis by:
-        1. Applying a 0.5 threshold to channels 0, 2, and 4 (binary classification)
-        2. For channels 1, 3, and 5, identifying local maxima among high-confidence predictions
-           and setting only those local maxima to 1.0 while zeroing out other values
-        
-        Args:
-            y (torch.Tensor): Model predictions with shape [channels, length] for single sample
-                             or [batch_size, channels, length] for batched samples.
-                             Expected to have 6 channels representing different ECG features.
-        
-        Returns:
-            torch.Tensor: Postprocessed predictions with the same shape as input.
-                         Channels 0, 2, 4 contain binary values (0 or 1).
-                         Channels 1, 3, 5 contain sparse binary values (1 only at local maxima).
-        
-        Note:
-            The method modifies the input tensor in-place and also returns it.
-            Channels 1, 3, 5 are assumed to represent peak detection tasks where only
-            local maxima should be preserved.
+        Fixed GPU-vectorized postprocessing for predictions.
         """
-        # Check if y is batched (shape: [batch_size, channels, length])
-        if y.dim() == 3:
-            # Iterate over batch
-            for i in range(y.shape[0]):
-                y_ = (y[i] > 0.5).float()
-                y[i, 0] = y_[0]
-                y[i, 2] = y_[2]
-                y[i, 4] = y_[4]
-                # For channels 1, 3, 5, set the local maximums with confidence > 0.5 to 1
-                for ch_idx in [1, 3, 5]:
-                    high_conf_indices = (y[i, ch_idx] > 0.5).nonzero(as_tuple=True)[0]
-                    for idx in high_conf_indices:
-                        left = y[i, ch_idx][idx - 1] if idx > 0 else float('-inf')
-                        right = y[i, ch_idx][idx + 1] if idx < y[i, ch_idx].shape[0] - 1 else float('-inf')
-                        if y[i, ch_idx][idx] >= left and y[i, ch_idx][idx] >= right:
-                            y[i, ch_idx].zero_()
-                            y[i, ch_idx][idx] = 1.0
-        else:
-            y_ = (y > 0.5).float()
-            y[0] = y_[0]
-            y[2] = y_[2]
-            y[4] = y_[4]
+        y_processed = y.clone()
+        
+        if y.dim() == 3:  # Batched
+            # Threshold channels 0, 2, 4
+            y_processed[:, [0, 2, 4]] = (y[:, [0, 2, 4]] > 0.5).float()
+            
+            # Process channels 1, 3, 5 individually to avoid indexing issues
             for ch_idx in [1, 3, 5]:
-                high_conf_indices = (y[ch_idx] > 0.5).nonzero(as_tuple=True)[0]
-                for idx in high_conf_indices:
-                    left = y[ch_idx][idx - 1] if idx > 0 else float('-inf')
-                    right = y[ch_idx][idx + 1] if idx < y[ch_idx].shape[0] - 1 else float('-inf')
-                    if y[ch_idx][idx] >= left and y[ch_idx][idx] >= right:
-                        y[ch_idx].zero_()
-                        y[ch_idx][idx] = 1.0
-        return y
+                peak_channel = y[:, ch_idx]  # Shape: [batch, length]
+                
+                # High confidence mask
+                high_conf = peak_channel > 0.5
+                
+                # Compute local maxima
+                padded = torch.nn.functional.pad(peak_channel, (1, 1), mode='constant', value=float('-inf'))
+                left = padded[:, :-2]
+                center = padded[:, 1:-1]
+                right = padded[:, 2:]
+                
+                is_local_max = (center >= left) & (center >= right)
+                
+                # Combine conditions
+                final_mask = high_conf & is_local_max
+                
+                # Zero out and set peaks for this specific channel
+                y_processed[:, ch_idx] = 0.0
+                y_processed[:, ch_idx][final_mask] = 1.0
+                
+        else:  # Single sample
+            # Threshold channels 0, 2, 4
+            y_processed[[0, 2, 4]] = (y[[0, 2, 4]] > 0.5).float()
+            
+            # Process channels 1, 3, 5 individually
+            for ch_idx in [1, 3, 5]:
+                peak_channel = y[ch_idx]  # Shape: [length]
+                
+                # High confidence mask
+                high_conf = peak_channel > 0.5
+                
+                # Compute local maxima
+                padded = torch.nn.functional.pad(peak_channel.unsqueeze(0), (1, 1), mode='constant', value=float('-inf'))
+                left = padded[:, :-2].squeeze(0)
+                center = padded[:, 1:-1].squeeze(0)
+                right = padded[:, 2:].squeeze(0)
+                
+                is_local_max = (center >= left) & (center >= right)
+                
+                # Combine conditions
+                final_mask = high_conf & is_local_max
+                
+                # Zero out and set peaks for this specific channel
+                y_processed[ch_idx] = 0.0
+                y_processed[ch_idx][final_mask] = 1.0
+        
+        return y_processed
     
+    # def postprocess_ground_truth(self, y):
+    #     """
+    #     Postprocess ground truth annotations by setting local maxima for specific channels.
+        
+    #     This function processes ground truth data for channels 1, 3, and 5 by identifying
+    #     positions where the value equals 1, zeroing out the entire channel, and then
+    #     setting those specific positions back to 1.0. This creates sparse ground truth
+    #     annotations with peaks at the identified locations.
+        
+    #     Args:
+    #         y (torch.Tensor): Ground truth tensor. Can be either:
+    #             - 3D tensor with shape [batch_size, channels, length] for batched data
+    #             - 2D tensor with shape [channels, length] for single sample
+        
+    #     Returns:
+    #         torch.Tensor: Postprocessed ground truth tensor with the same shape as input,
+    #                      where channels 1, 3, and 5 contain sparse peaks at the original
+    #                      locations where values equaled 1.
+        
+    #     Note:
+    #         Only channels 1, 3, and 5 are processed. Other channels remain unchanged.
+    #         The function modifies the input tensor in-place.
+    #     """
+    #     # Ground truth: Channels 1, 3, 5, set local maxima where value equals 1
+    #     # Check if y is batched (shape: [batch_size, channels, length])
+    #     if y.dim() == 3:
+    #         # Iterate over batch
+    #         for i in range(y.shape[0]):
+    #             for ch_idx in [1, 3, 5]:
+    #                 true_indices = (y[i, ch_idx] == 1).nonzero(as_tuple=True)[0]
+    #                 y[i, ch_idx].zero_()
+    #                 y[i, ch_idx][true_indices] = 1.0
+    #     else:
+    #         # Single sample
+    #         for ch_idx in [1, 3, 5]:
+    #             true_indices = (y[ch_idx] == 1).nonzero(as_tuple=True)[0]
+    #             y[ch_idx].zero_()
+    #             y[ch_idx][true_indices] = 1.0
+    #     return y
+
     def postprocess_ground_truth(self, y):
         """
-        Postprocess ground truth annotations by setting local maxima for specific channels.
-        
-        This function processes ground truth data for channels 1, 3, and 5 by identifying
-        positions where the value equals 1, zeroing out the entire channel, and then
-        setting those specific positions back to 1.0. This creates sparse ground truth
-        annotations with peaks at the identified locations.
-        
-        Args:
-            y (torch.Tensor): Ground truth tensor. Can be either:
-                - 3D tensor with shape [batch_size, channels, length] for batched data
-                - 2D tensor with shape [channels, length] for single sample
-        
-        Returns:
-            torch.Tensor: Postprocessed ground truth tensor with the same shape as input,
-                         where channels 1, 3, and 5 contain sparse peaks at the original
-                         locations where values equaled 1.
-        
-        Note:
-            Only channels 1, 3, and 5 are processed. Other channels remain unchanged.
-            The function modifies the input tensor in-place.
+        Corrected GPU-vectorized postprocessing for ground truth.
         """
-        # Ground truth: Channels 1, 3, 5, set local maxima where value equals 1
-        # Check if y is batched (shape: [batch_size, channels, length])
-        if y.dim() == 3:
-            # Iterate over batch
-            for i in range(y.shape[0]):
-                for ch_idx in [1, 3, 5]:
-                    true_indices = (y[i, ch_idx] == 1).nonzero(as_tuple=True)[0]
-                    y[i, ch_idx].zero_()
-                    y[i, ch_idx][true_indices] = 1.0
-        else:
-            # Single sample
+        # Clone to avoid modifying input tensor
+        y_processed = y.clone()
+        
+        if y.dim() == 3:  # Batched tensor [batch_size, channels, length]
+            # Process each channel individually to avoid indexing issues
             for ch_idx in [1, 3, 5]:
-                true_indices = (y[ch_idx] == 1).nonzero(as_tuple=True)[0]
-                y[ch_idx].zero_()
-                y[ch_idx][true_indices] = 1.0
-        return y
+                # Find where values equal 1 for this specific channel
+                true_mask = (y[:, ch_idx] == 1)  # Shape: [batch_size, length]
+                
+                # Zero out the channel
+                y_processed[:, ch_idx] = 0.0
+                
+                # Set back to 1 where original was 1
+                y_processed[:, ch_idx][true_mask] = 1.0
+                
+        else:  # Single sample tensor [channels, length]
+            # Process each channel individually
+            for ch_idx in [1, 3, 5]:
+                # Find where values equal 1 for this specific channel
+                true_mask = (y[ch_idx] == 1)  # Shape: [length]
+                
+                # Zero out the channel
+                y_processed[ch_idx] = 0.0
+                
+                # Set back to 1 where original was 1
+                y_processed[ch_idx][true_mask] = 1.0
+        
+        return y_processed
+
+    # Function to generate a plot of the ECG data and the labels
+    def generatePlot(self, x, y, x_hat, y_hat, feature_names=['P wave', 'P peak', 'QRS complex', 'R peak', 'T wave', 'T peak'], lead_names=None, config=None, path=None):
+        
+        if config is not None:
+            feature_names=config['feature_names'] if 'feature_names' in config else feature_names
+            lead_names=config['data_cols'] if 'data_cols' in config else lead_names
+        
+        fig, axs = plt.subplots(7, 1, figsize=(15, 10), sharex=True, gridspec_kw={'height_ratios': [5, 1, 1, 1, 1, 1, 1]})
+        # Plot ECG data
+        # Plot all ECG leads if multiple leads exist
+        if x.shape[0] > 1:
+            for lead_idx in range(x.shape[0]):
+                axs[0].plot(x[lead_idx].numpy(), label=f'Lead {lead_idx + 1}' if lead_names is None else lead_names[lead_idx])
+                axs[0].legend()
+        else:
+            axs[0].plot(x[0].numpy(), color='blue')
+
+        axs[0].set_title('ECG Data')
+        # Range between min and max value of ECG data
+        # Get min and max values across all leads
+        all_leads_min = min([lead.numpy().min() for lead in x])
+        all_leads_max = max([lead.numpy().max() for lead in x])
+        axs[0].set_ylim([all_leads_min*1.1, all_leads_max*1.1])
+        axs[0].set_ylabel('Amplitude [normalized]')
+        axs[0].set_yticks(range(math.floor(min(x[0].numpy())*1.1),math.floor(max(x[0].numpy())*1.1), 1))
+        axs[0].set_xticks(range(0, 551, 50))
+
+        # Plot labels
+        for i in range(6):
+            axs[i + 1].plot(y[i].numpy(), color='green')
+            axs[i + 1].plot(y_hat[i].numpy(), color='blue')
+            # axs[i + 1].plot(abs(y[i].numpy() - y_hat[i].numpy()), color='red', linestyle='--')
+            axs[i + 1].set_ylim([-0.1, 1.1])
+            axs[i + 1].set_ylabel(feature_names[i])
+            axs[i + 1].set_yticks([0, 1])
+            axs[i + 1].set_yticklabels(['0', '1'])
+            axs[i + 1].set_xticks([])
+            axs[i + 1].legend(['Ground truth', 'Prediction'], fontsize='x-small', fancybox=False, loc='upper right')
+
+        axs[-1].set_xlabel('Sample [n]')
+        axs[-1].set_xticks(range(0, 551, 50))
+
+        plt.tight_layout()
+
+        if path is not None:
+            plt.savefig(path)
+        
+        #save_img_path = r"\\nas-k2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\HKA_EKG_Signalverarbeitung\images"
+        #os.listdir(save_img_path)
+        #number_of_images = len(os.listdir(save_img_path))
+        #plt.savefig(save_img_path + r"\plot_" + str(number_of_images) + ".png")
+        
+        plt.show()
+        plt.close()
 
 # Convolution + BatchNorm + ReLU Block (conbr)
 # The order of Relu and Batchnorm is interchangeable and influences the performance and training speed

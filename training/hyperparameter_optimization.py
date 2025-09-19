@@ -113,6 +113,7 @@ class OptunaTrainer:
             scheduler_name=self.config['scheduler'],
             model_name=self.config['experiment_name']
         )
+        self.model.config = self.config  # Store config in model for later use (e.g. for plotting)
 
         # Setup trainer
         trainer = Trainer(

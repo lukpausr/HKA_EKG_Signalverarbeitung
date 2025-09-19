@@ -16,6 +16,7 @@ num_workers: 14
 persistent_workers: True
 sampling_rate: 512
 feature_list: ['P-wave', 'P-peak', 'QRS-complex', 'R-peak', 'T-wave', 'T-peak']
+data_cols: ['II']  # all combinations of leads are possible
 available_leads: ['I', 'II', 'III', 'AVR', 'AVL', 'AVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
 # Model configuration (for training without using Hyperparameter Tuning)
@@ -28,10 +29,10 @@ wandb_project_name: HKA-EKG-Signalverarbeitung
 wandb_experiment_name: manual_training_1_lead
 
 # Hypereparameter Tuning configuration (not all parameters are to be set in this config file)
-number_of_trials: 5
+number_of_trials: 25
 hpo_batch_size: [16, 32, 64]
-hpo_min_epochs: 3
-hpo_max_epochs: 5
+hpo_min_epochs: 25
+hpo_max_epochs: 75
 hpo_accumulate_grad_batches: [1, 2, 4, 8]
 hpo_precision: [16-mixed, 32]
 hpo_optimizers: ['Adam', 'SGD', 'AdamW']

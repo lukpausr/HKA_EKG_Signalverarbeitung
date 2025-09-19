@@ -48,6 +48,8 @@ class ECG_DataSet(torch.utils.data.Dataset):
         sample = pd.read_csv(self.data_dir + self.file_list[idx])
         
         if self.peak_to_center:
+            # Print warning that centering is enabled
+            print("Warning: Centering R-peak in 512-point window is enabled.")
             # Find the index of the R-peak
             valid_r_peaks = []
             start_idx = None
@@ -83,7 +85,7 @@ class ECG_DataSet(torch.utils.data.Dataset):
             
             # Update the DataFrame
             sample[peak_features] = peak_data
-        
+
         # Convert to numpy arrays first, then to tensors with explicit copying
         data_array = sample[self.data_cols].values.astype(np.float32).copy()
         label_array = sample[self.label_cols].values.astype(np.float32).copy()
