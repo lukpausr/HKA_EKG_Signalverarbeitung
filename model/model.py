@@ -813,9 +813,42 @@ class EKG_Segmentation_Module(pl.LightningModule):
         all_leads_min = min([lead.numpy().min() for lead in x])
         all_leads_max = max([lead.numpy().max() for lead in x])
         axs[0].set_ylim([all_leads_min*1.1, all_leads_max*1.1])
-        axs[0].set_ylabel('Amplitude [normalized]')
-        axs[0].set_yticks(range(math.floor(min(x[0].numpy())*1.1),math.floor(max(x[0].numpy())*1.1), 1))
-        axs[0].set_xticks(range(0, 551, 50))
+        axs[0].set_ylabel('Amplitude [mV]')
+
+        # Calculate appropriate tick ranges based on data
+        y_min = all_leads_min * 1.1
+        y_max = all_leads_max * 1.1
+
+        # Major ticks every 0.5mV
+        major_ticks = np.arange(
+            math.floor(y_min / 0.5) * 0.5,  # Round down to nearest 0.5mV
+            math.ceil(y_max / 0.5) * 0.5 + 0.5,  # Round up to nearest 0.5mV
+            0.5  # Step size: 0.5mV
+        )
+        
+        # Minor ticks every 0.1mV
+        minor_ticks = np.arange(
+            math.floor(y_min / 0.1) * 0.1,  # Round down to nearest 0.1mV
+            math.ceil(y_max / 0.1) * 0.1 + 0.1,  # Round up to nearest 0.1mV
+            0.1  # Step size: 0.1mV
+        )
+
+        # Set the major and minor ticks
+        axs[0].set_yticks(major_ticks)  # Major ticks at 0.5mV intervals
+        axs[0].set_yticks(minor_ticks, minor=True)  # Minor ticks at 0.1mV intervals
+        
+        axs[0].set_xticks(range(0, 551, 100)) # Major ticks every 100 samples
+        axs[0].set_xticks(range(0, 551, 20), minor=True) # Minor ticks every 20 samples
+
+        # Medical ECG paper-style grid
+        axs[0].grid(which='major', color='lightgray', linestyle='-', linewidth=0.8)  # 0.5mV lines
+        axs[0].grid(which='minor', color='lightgray', linestyle='--', linewidth=0.5)  # 0.1mV lines
+        axs[0].minorticks_on()
+        axs[0].set_axisbelow(True)
+
+        # Optional: Add grid labels for better readability
+        axs[0].tick_params(axis='y', which='major', labelsize=10, color='gray')
+        axs[0].tick_params(axis='y', which='minor', labelsize=8, color='lightgray')
 
         # Plot labels
         for i in range(6):
@@ -834,7 +867,7 @@ class EKG_Segmentation_Module(pl.LightningModule):
 
         plt.tight_layout()
 
-        if path is not None:
+        if path is not None and os.path.exists(os.path.dirname(path)):
             plt.savefig(path)
         
         #save_img_path = r"\\nas-k2\homes\Lukas Pelz\10_Arbeit_und_Bildung\20_Masterstudium\01_Semester\90_Projekt\10_DEV\HKA_EKG_Signalverarbeitung\images"
@@ -842,7 +875,7 @@ class EKG_Segmentation_Module(pl.LightningModule):
         #number_of_images = len(os.listdir(save_img_path))
         #plt.savefig(save_img_path + r"\plot_" + str(number_of_images) + ".png")
         
-        plt.show()
+        # plt.show()
         plt.close()
 
 # Convolution + BatchNorm + ReLU Block (conbr)
