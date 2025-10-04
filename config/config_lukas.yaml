@@ -5,43 +5,57 @@ path_to_matlab_data: C:\Users\lukas\Documents\HKA_DEV\HKA_EKG_Signalverarbeitung
 
 # Data preprocessing configuration
 source_feature_list: ['P-wave', 'P-peak', 'QRS-complex', 'R-peak', 'T-wave', 'T-peak']
-number_of_augmentations: 6      # augmentations per sample
-normalization_method: 'min-max' # Options: 'min-max', 'z-score'
+number_of_augmentations: 6                # augmentations per sample; currently not used because augmentations are done on-the-fly during training
+normalization_method: 'min-max'           # Options: 'min-max', 'z-score'; currently not used because normalization is done on-the-fly during training
 
 # Project seed configuration for reproducibility
-seed: 42
+seed: 42                                  # any integer, sets the seed for random number generators in numpy, torch, and random
 
 # Data Module configuration
-num_workers: 14
-persistent_workers: True
-sampling_rate: 512
-feature_list: ['P-wave', 'P-peak', 'QRS-complex', 'R-peak', 'T-wave', 'T-peak']
-data_cols: ['II']  # all combinations of leads are possible
-available_leads: ['I', 'II', 'III', 'AVR', 'AVL', 'AVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+num_workers: 14                           # number of workers for data loading within PyTorch Lightning DataModule
+persistent_workers: True                  # keep data loading workers alive between epochs to speed up data loading
+sampling_rate: 512                        # sampling rate for the input signals
+feature_list: ['P-wave', 'P-peak', 'QRS-complex', 'R-peak', 'T-wave', 'T-peak']                 # features to be detected
+data_cols: ['II']                                                                               # all combinations of leads are possible
+# available_leads: ['I', 'II', 'III', 'AVR', 'AVL', 'AVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6'] 
+available_leads: ['V2']   # available leads in the dataset
 
 # Model configuration (for training without using Hyperparameter Tuning)
-batch_size: 32
-max_epochs: 50
-learning_rate: 0.001
+batch_size: 32                            # batch size for training
+max_epochs: 50                            # maximum number of epochs for training
+learning_rate: 0.001                      # learning rate for the optimizer
 
 # Postprocessing configuration
-use_nms: True
-nms_window_size: 100 # in samples
+use_nms: True                             # whether to use Non-Maximum Suppression (NMS) in postprocessing
+nms_window_size: 100                      # in samples
 
 # Wandb configuration
-wandb_project_name: HKA-EKG-Signalverarbeitung
+wandb_project_name: HKA-EKG-Signalverarbeitung_SingleLead
 wandb_experiment_name: manual_training_1_lead
 
 # Hyperparameter Tuning configuration (not all parameters are to be set in this config file)
-number_of_trials: 25
-hpo_batch_size: [16, 32, 64]
-hpo_min_epochs: 25
-hpo_max_epochs: 75
-hpo_accumulate_grad_batches: [1, 2, 4, 8]
-hpo_precision: [16-mixed, 32]
-hpo_optimizers: ['Adam', 'SGD', 'AdamW']
-hpo_min_learning_rate: 0.00005
-hpo_max_learning_rate: 0.01
-hpo_min_weight_decay: 0.00001
-hpo_max_weight_decay: 0.01
-hpo_scheduler: ['StepLR', 'CosineAnnealingLR', 'ReduceLROnPlateau']
+number_of_trials: 1
+hpo_batch_size: [16]
+hpo_min_epochs: 50
+hpo_max_epochs: 50
+hpo_accumulate_grad_batches: [1]
+hpo_precision: [32]
+hpo_optimizers: ['SGD']
+hpo_min_learning_rate: 0.005
+hpo_max_learning_rate: 0.005
+hpo_min_weight_decay: 0.00002
+hpo_max_weight_decay: 0.00002
+hpo_scheduler: ['ReduceLROnPlateau']
+
+# number_of_trials: 25
+# hpo_batch_size: [16, 32, 64]
+# hpo_min_epochs: 25
+# hpo_max_epochs: 75
+# hpo_accumulate_grad_batches: [1, 2, 4, 8]
+# hpo_precision: [16-mixed, 32]
+# hpo_optimizers: ['Adam', 'SGD', 'AdamW']
+# hpo_min_learning_rate: 0.00005
+# hpo_max_learning_rate: 0.01
+# hpo_min_weight_decay: 0.00001
+# hpo_max_weight_decay: 0.01
+# hpo_scheduler: ['StepLR', 'CosineAnnealingLR', 'ReduceLROnPlateau']

@@ -82,7 +82,10 @@ class OptunaTrainer:
         self.config['weight_decay'] = trial.suggest_float('weight_decay', self.config['hpo_min_weight_decay'], self.config['hpo_max_weight_decay'], log=True)
         self.config['scheduler'] = trial.suggest_categorical('scheduler', self.config['hpo_scheduler'])
         
-        self.config['data_cols'] = self.suggest_ecg_leads(trial, self.config['available_leads'])
+        # self.config['data_cols'] = self.suggest_ecg_leads(trial, self.config['available_leads'])
+
+        self.config['data_cols'] = [trial.suggest_categorical('data_cols', self.config['available_leads'])]  # Single lead for single lead trials
+
         print(f"Selected leads for this trial: {self.config['data_cols']}")
 
         transform = self._build_transform() # not utilized, but acts as a dummy for data augmentation if required

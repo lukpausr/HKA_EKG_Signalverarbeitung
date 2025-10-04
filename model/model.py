@@ -535,7 +535,7 @@ class EKG_Segmentation_Module(pl.LightningModule):
 
         x_hat = self.forward(x)
 
-        # Log loss (BCEWithLogits requires logits, not probabilities, therefore we calculate it before applying sigmoid)
+        # Log loss (BCEWithLogits integrates BCE and sigmoid to calculate loss)
         loss = self.criterion(x_hat, y)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
@@ -563,7 +563,7 @@ class EKG_Segmentation_Module(pl.LightningModule):
 
         x_hat = self.forward(x)
 
-        # Log loss (BCEWithLogits requires logits, not probabilities, therefore we calculate it before applying sigmoid)
+        # Log loss (BCEWithLogits integrates BCE and sigmoid to calculate loss)
         loss = self.criterion(x_hat, y)
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
@@ -581,7 +581,7 @@ class EKG_Segmentation_Module(pl.LightningModule):
 
         x_hat = self.forward(x)
 
-        # Log loss (BCEWithLogits requires logits, not probabilities, therefore we calculate it before applying sigmoid)
+        # Log loss (BCEWithLogits integrates BCE and sigmoid to calculate loss)
         loss = self.criterion(x_hat, y)
         self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
