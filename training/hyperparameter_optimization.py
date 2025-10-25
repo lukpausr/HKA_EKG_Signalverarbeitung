@@ -83,8 +83,8 @@ class OptunaTrainer:
         self.config['scheduler'] = trial.suggest_categorical('scheduler', self.config['hpo_scheduler'])
         
         # self.config['data_cols'] = self.suggest_ecg_leads(trial, self.config['available_leads'])
-
-        self.config['data_cols'] = [trial.suggest_categorical('data_cols', self.config['available_leads'])]  # Single lead for single lead trials
+        # self.config['data_cols'] = [trial.suggest_categorical('data_cols', self.config['available_leads'])]  # Single lead for single lead trials
+        self.config['data_cols'] = self.config['available_leads']  # Use all available leads for 12-lead training
 
         print(f"Selected leads for this trial: {self.config['data_cols']}")
 

@@ -12,12 +12,12 @@ from scipy.ndimage import gaussian_filter1d
 # Custom Dataset for Pytorch
 # Source: https://pytorch.org/tutorials/beginner/basics/data_tutorial.html
 class ECG_DataSet(torch.utils.data.Dataset):
-    def __init__(self, data_dir: str, label_cols: str = None, data_cols: str = None):
+    def __init__(self, data_dir: str, label_cols: str = None, data_cols: str = None, peak_to_center: bool = False):
         self.data_dir = data_dir
         self.label_cols = label_cols
         self.data_cols = data_cols
 
-        self.peak_to_center = False # If True, the R-peak will be centered in the 512 datapoints window
+        self.peak_to_center = peak_to_center # If True, the R-peak will be centered in the 512 datapoints window
 
         # Generate a list containing all file names in directory
         self.file_list = os.listdir(data_dir)

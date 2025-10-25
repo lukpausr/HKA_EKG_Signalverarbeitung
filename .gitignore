@@ -169,3 +169,6 @@ HKA-EKG-Signalverarbeitung/
 lightning_logs/*
 preprocessing_matlab/WFDB_Toolbox/*
 HKA-EKG-Signalverarbeitung_SingleLead/*
+HKA-EKG-Signalverarbeitung_Lead_V5/*
+HKA-EKG-Signalverarbeitung_12-Lead/*
+HKA-EKG-Signalverarbeitung_V5_centeredpeaks/*

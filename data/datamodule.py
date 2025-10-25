@@ -40,13 +40,13 @@ class ECG_DataModule(pl.LightningDataModule):
 
         # Assign train/val datasets for use in dataloaders
         if stage == "fit" or stage is None:
-            self.train_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_train\\', label_cols=self.feature_list, data_cols=self.data_cols)
-            self.val_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_val\\', label_cols=self.feature_list, data_cols=self.data_cols)
+            self.train_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_train\\', label_cols=self.feature_list, data_cols=self.data_cols, peak_to_center=False)
+            self.val_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_val\\', label_cols=self.feature_list, data_cols=self.data_cols, peak_to_center=False)
             pass
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test" or stage is None:
-            self.test_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_test\\', label_cols=self.feature_list, data_cols=self.data_cols)
+            self.test_dataset = ECG_DataSet(data_dir=self.data_dir+'\\pd_dataset_test\\', label_cols=self.feature_list, data_cols=self.data_cols, peak_to_center=False)
             pass
 
     # Define the train dataloader
